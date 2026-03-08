@@ -1,0 +1,53 @@
+[project]
+name = "mimic-cli"
+version = "0.1.0"
+description = "Control Talon in a macOS VM."
+readme = "README.md"
+authors = [{name = "James Stout"}]
+requires-python = ">=3.11"
+classifiers = [
+    "License :: OSI Approved :: Apache Software License"
+]
+dependencies = [
+    "click"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.urls]
+Homepage = "https://github.com/wolfmanstout/mimic-cli"
+Changelog = "https://github.com/wolfmanstout/mimic-cli/releases"
+Issues = "https://github.com/wolfmanstout/mimic-cli/issues"
+CI = "https://github.com/wolfmanstout/mimic-cli/actions"
+
+[project.scripts]
+mimic-cli = "mimic_cli.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.ruff.lint]
+select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # flake8-bugbear
+    "B",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+]
+ignore = ["E501", "SIM105", "SIM116", "UP045"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"
