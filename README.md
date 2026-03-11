@@ -17,13 +17,33 @@ pip install mimic-cli
 
 ## Usage
 
-For help, run:
+`mimic-cli` is a small set of primitives for coding agents that need to stage Talon
+changes inside a local Lume VM before touching the host machine.
+
+For top-level help, run:
 
 ```bash
 mimic-cli --help
 ```
 
-You can also use:
+Typical workflow:
+
+```bash
+mimic-cli start
+mimic-cli rsync -av ~/.talon/user/ /Users/lume/.talon/user/
+mimic-cli mimic "focus chrome"
+mimic-cli screenshot /tmp/talon.png
+mimic-cli stop
+```
+
+General guest access:
+
+```bash
+mimic-cli exec -- whoami
+printf 'print(1 + 1)\n' | mimic-cli repl
+```
+
+You can also run:
 
 ```bash
 python -m mimic_cli --help

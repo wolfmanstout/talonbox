@@ -1,0 +1,47 @@
+prefix_rule(
+    pattern = ["uv", "run", "mimic-cli", "start"],
+    decision = "allow",
+    justification = "Starts the VM and bootstraps Talon over SSH, which needs network access and host-side VM state changes.",
+)
+
+prefix_rule(
+    pattern = ["uv", "run", "mimic-cli", "stop"],
+    decision = "allow",
+    justification = "Stops the VM, which changes host-side VM state outside the sandbox.",
+)
+
+prefix_rule(
+    pattern = ["uv", "run", "mimic-cli", "exec"],
+    decision = "allow",
+    justification = "Runs commands in the guest over SSH, which needs network access.",
+)
+
+prefix_rule(
+    pattern = ["uv", "run", "mimic-cli", "restart-talon"],
+    decision = "allow",
+    justification = "Runs commands in the guest over SSH, which needs network access.",
+)
+
+prefix_rule(
+    pattern = ["uv", "run", "mimic-cli", "rsync"],
+    decision = "allow",
+    justification = "Copies files to the guest over rsync/SSH, which needs network access.",
+)
+
+prefix_rule(
+    pattern = ["uv", "run", "mimic-cli", "repl"],
+    decision = "allow",
+    justification = "Connects to the guest Talon REPL over SSH, which needs network access.",
+)
+
+prefix_rule(
+    pattern = ["uv", "run", "mimic-cli", "mimic"],
+    decision = "allow",
+    justification = "Sends Talon commands to the guest over SSH, which needs network access.",
+)
+
+prefix_rule(
+    pattern = ["uv", "run", "mimic-cli", "screenshot"],
+    decision = "allow",
+    justification = "Captures in the guest and downloads over SSH/rsync, which needs network access.",
+)
