@@ -26,7 +26,8 @@ from .transport import (
     run_remote_repl,
     run_remote_shell,
     run_remote_shell_streaming,
-    run_rsync_to_guest,
+    run_rsync,
+    run_scp,
     wait_for_talon_repl,
 )
 
@@ -43,9 +44,45 @@ TALON_TIMEOUT_SECONDS = 30.0
 TALON_REPL_TIMEOUT_SECONDS = 30.0
 HELP_COMMAND_GROUPS = (
     ("VM lifecycle", ("setup", "start", "restart-talon", "stop", "show")),
-    ("Guest shell", ("exec", "rsync")),
+    ("Guest shell", ("exec", "rsync", "scp")),
     ("Talon RPC", ("repl", "mimic", "screenshot")),
 )
+
+GUEST_PREFIX = "guest:"
+RSYNC_VALUE_OPTIONS = {
+    "-B",
+    "-f",
+    "-M",
+    "-T",
+    "--backup-dir",
+    "--block-size",
+    "--bwlimit",
+    "--chmod",
+    "--compare-dest",
+    "--compress-choice",
+    "--copy-dest",
+    "--exclude",
+    "--exclude-from",
+    "--files-from",
+    "--filter",
+    "--iconv",
+    "--include",
+    "--include-from",
+    "--link-dest",
+    "--log-file",
+    "--log-file-format",
+    "--max-size",
+    "--min-size",
+    "--out-format",
+    "--partial-dir",
+    "--password-file",
+    "--skip-compress",
+    "--suffix",
+    "--temp-dir",
+}
+RSYNC_REJECTED_OPTIONS = {"-e", "--rsh", "--rsync-path"}
+SCP_VALUE_OPTIONS = {"-c", "-D", "-i", "-l", "-o", "-P", "-S", "-X"}
+SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
 
 
 class MimicCommand(click.Command):
@@ -131,6 +168,13 @@ class Context:
 pass_context = click.make_pass_decorator(Context)
 
 
+@dataclass(frozen=True, slots=True)
+class TransferOperand:
+    raw: str
+    kind: str
+    path: str
+
+
 def _raise_click_error(message: str) -> None:
     raise click.ClickException(message)
 
@@ -162,6 +206,112 @@ def _print_vm_info(info: lume.VmInfo) -> None:
         click.echo(f"ip: {info.ip_address}")
         click.echo(f"username: {SSH_USERNAME}")
         click.echo(f"password: {SSH_PASSWORD}")
+
+
+def _split_transfer_args(
+    args: Sequence[str],
+    *,
+    value_options: set[str],
+    rejected_options: set[str],
+) -> tuple[list[str], list[str]]:
+    passthrough: list[str] = []
+    positionals: list[str] = []
+    index = 0
+    parsing_options = True
+
+    while index < len(args):
+        arg = args[index]
+        if parsing_options and arg == "--":
+            passthrough.append(arg)
+            parsing_options = False
+            index += 1
+            continue
+        if not parsing_options or not arg.startswith("-") or arg == "-":
+            positionals.append(arg)
+            index += 1
+            continue
+
+        if arg.startswith("--"):
+            option, has_value, attached_value = arg.partition("=")
+            if option in rejected_options:
+                _raise_click_error(f"Option not allowed for VM-only transfer safety: {option}")
+            passthrough.append(arg)
+            index += 1
+            if has_value or option not in value_options:
+                continue
+            if index >= len(args):
+                _raise_click_error(f"Option requires a value: {option}")
+            passthrough.append(args[index])
+            index += 1
+            continue
+
+        short_option = arg[:2]
+        if short_option in rejected_options:
+            _raise_click_error(f"Option not allowed for VM-only transfer safety: {short_option}")
+        passthrough.append(arg)
+        index += 1
+        if short_option not in value_options or len(arg) > 2:
+            continue
+        if index >= len(args):
+            _raise_click_error(f"Option requires a value: {short_option}")
+        passthrough.append(args[index])
+        index += 1
+
+    return passthrough, positionals
+
+
+def _classify_transfer_operand(raw: str) -> TransferOperand:
+    if raw.startswith(GUEST_PREFIX):
+        path = raw[len(GUEST_PREFIX) :]
+        if not path:
+            _raise_click_error("Guest path must not be empty: guest:/path")
+        return TransferOperand(raw=raw, kind="guest", path=path)
+    if raw.startswith("rsync://"):
+        _raise_click_error(f"Only guest: remote paths are allowed: {raw}")
+    if ":" in raw:
+        _raise_click_error(f"Only guest: remote paths are allowed: {raw}")
+    return TransferOperand(raw=raw, kind="local", path=raw)
+
+
+def _prepare_transfer_args(
+    ctx: Context,
+    args: Sequence[str],
+    *,
+    value_options: set[str],
+    rejected_options: set[str],
+) -> list[str]:
+    passthrough, positionals = _split_transfer_args(
+        args,
+        value_options=value_options,
+        rejected_options=rejected_options,
+    )
+    if len(positionals) < 2:
+        _raise_click_error("Transfer requires at least one source and one destination")
+
+    info = _require_running_vm(ctx)
+    sources = [_classify_transfer_operand(arg) for arg in positionals[:-1]]
+    destination = _classify_transfer_operand(positionals[-1])
+
+    source_kinds = {source.kind for source in sources}
+    if len(source_kinds) != 1:
+        _raise_click_error("Mixed local and guest sources are not allowed")
+    source_kind = next(iter(source_kinds))
+    if source_kind == destination.kind:
+        if source_kind == "local":
+            _raise_click_error("Local-to-local transfers are not allowed; use guest: paths for the VM")
+        _raise_click_error("Guest-to-guest transfers are not allowed")
+
+    rewritten = [
+        _rewrite_transfer_operand(info.ip_address, operand)
+        for operand in [*sources, destination]
+    ]
+    return [*passthrough, *rewritten]
+
+
+def _rewrite_transfer_operand(ip_address: str, operand: TransferOperand) -> str:
+    if operand.kind == "local":
+        return operand.path
+    return f"{SSH_USERNAME}@{ip_address}:{operand.path}"
 
 
 def _is_blank_png(filepath: Path) -> bool:
@@ -311,7 +461,8 @@ def _cleanup_failed_start(ctx: Context, state: StateRecord) -> None:
         "  mimic-cli start",
         "  mimic-cli restart-talon",
         "  mimic-cli exec -- uname -a",
-        "  mimic-cli rsync -av ~/.talon/user/ /Users/lume/.talon/user/",
+        "  mimic-cli rsync -av ~/.talon/user/ guest:/Users/lume/.talon/user/",
+        "  mimic-cli scp guest:/tmp/out.png /tmp/out.png",
         "  mimic-cli mimic 'focus chrome'",
         "  mimic-cli screenshot /tmp/talon.png",
     ),
@@ -494,26 +645,58 @@ def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
 
 @cli.command(
     context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
-    short_help="Copy files from host to guest with rsync.",
+    short_help="Copy files between host and guest with rsync.",
     help=(
-        "Run rsync from the host into the guest VM.\n\n"
-        "Pass normal rsync flags and sources. The final argument is treated as the guest "
-        "destination path and will be rewritten to `lume@<ip>:<dest>`."
+        "Run rsync between the host and the guest VM.\n\n"
+        "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
+        "and only `guest:` remote paths are allowed. No other remotes are permitted."
     ),
     examples=(
-        "  mimic-cli rsync -av ~/.talon/user/ /Users/lume/.talon/user/",
-        "  mimic-cli rsync --delete repo/ /Users/lume/work/repo/",
+        "  mimic-cli rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
+        "  mimic-cli rsync -av guest:/Users/lume/Pictures/ ./guest-pictures/",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
 @pass_context
 def rsync(ctx: Context, args: tuple[str, ...]) -> None:
-    if len(args) < 2:
-        _raise_click_error("rsync requires at least one source and one destination")
-    info = _require_running_vm(ctx)
-    returncode = run_rsync_to_guest(
-        info.ip_address,
-        list(args),
+    rewritten_args = _prepare_transfer_args(
+        ctx,
+        args,
+        value_options=RSYNC_VALUE_OPTIONS,
+        rejected_options=RSYNC_REJECTED_OPTIONS,
+    )
+    returncode = run_rsync(
+        rewritten_args,
+        debug=ctx.debug,
+    )
+    if returncode:
+        raise click.exceptions.Exit(returncode)
+
+
+@cli.command(
+    context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
+    short_help="Copy files between host and guest with scp.",
+    help=(
+        "Run scp between the host and the guest VM.\n\n"
+        "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
+        "and only `guest:` remote paths are allowed. No other remotes are permitted."
+    ),
+    examples=(
+        "  mimic-cli scp ./settings.talon guest:/Users/lume/.talon/user/settings.talon",
+        "  mimic-cli scp guest:/tmp/out.png /tmp/out.png",
+    ),
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="SCP_ARGS...")
+@pass_context
+def scp(ctx: Context, args: tuple[str, ...]) -> None:
+    rewritten_args = _prepare_transfer_args(
+        ctx,
+        args,
+        value_options=SCP_VALUE_OPTIONS,
+        rejected_options=SCP_REJECTED_OPTIONS,
+    )
+    returncode = run_scp(
+        rewritten_args,
         debug=ctx.debug,
     )
     if returncode:

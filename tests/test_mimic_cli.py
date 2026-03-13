@@ -13,7 +13,7 @@ from mimic_cli.cli import cli
 from mimic_cli.lume import VmInfo
 from mimic_cli.state import StateRecord, state_paths
 from mimic_cli.talon import build_mimic_payload, build_repl_exec_payload
-from mimic_cli.transport import run_rsync_to_guest
+from mimic_cli.transport import run_rsync, run_scp
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +39,7 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "VM lifecycle:" in result.output
     assert "Guest shell:" in result.output
     assert "Talon RPC:" in result.output
+    assert "scp" in result.output
     assert "restart-talon" in result.output
     assert "mimic-cli exec -- uname -a" in result.output
 
@@ -303,6 +304,150 @@ def test_exec_single_argument_uses_shell_string(monkeypatch: pytest.MonkeyPatch)
     assert calls == [("192.168.64.10", "ps aux | grep safari")]
 
 
+def test_rsync_help_mentions_guest_prefix() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["rsync", "--help"])
+
+    assert result.exit_code == 0
+    assert "guest:/path" in result.output
+    assert "only `guest:` remote paths are allowed" in result.output
+
+
+def test_scp_help_mentions_guest_prefix() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["scp", "--help"])
+
+    assert result.exit_code == 0
+    assert "guest:/path" in result.output
+    assert "only `guest:` remote paths are allowed" in result.output
+
+
+def test_rsync_upload_rewrites_guest_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(
+        cli_module,
+        "run_rsync",
+        lambda args, debug=False: calls.append(args) or 0,
+    )
+
+    result = runner.invoke(cli, ["rsync", "-av", "./repo/", "guest:/Users/lume/.talon/user/repo/"])
+
+    assert result.exit_code == 0
+    assert calls == [["-av", "./repo/", "lume@192.168.64.10:/Users/lume/.talon/user/repo/"]]
+
+
+def test_rsync_download_rewrites_guest_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(
+        cli_module,
+        "run_rsync",
+        lambda args, debug=False: calls.append(args) or 0,
+    )
+
+    result = runner.invoke(cli, ["rsync", "-av", "guest:/Users/lume/Pictures/", "./guest-pictures/"])
+
+    assert result.exit_code == 0
+    assert calls == [["-av", "lume@192.168.64.10:/Users/lume/Pictures/", "./guest-pictures/"]]
+
+
+def test_rsync_rejects_local_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["rsync", "-av", "./repo/", "./copy/"])
+
+    assert result.exit_code == 1
+    assert "Local-to-local transfers are not allowed" in result.output
+
+
+def test_rsync_rejects_non_guest_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["rsync", "-av", "user@host:/tmp/x", "./copy/"])
+
+    assert result.exit_code == 1
+    assert "Only guest: remote paths are allowed" in result.output
+
+
+def test_rsync_rejects_old_implicit_guest_syntax(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["rsync", "-av", "./repo/", "/Users/lume/.talon/user/repo/"])
+
+    assert result.exit_code == 1
+    assert "Local-to-local transfers are not allowed" in result.output
+
+
+def test_rsync_rejects_transport_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["rsync", "-e", "ssh", "./repo/", "guest:/tmp/repo/"])
+
+    assert result.exit_code == 1
+    assert "Option not allowed for VM-only transfer safety: -e" in result.output
+
+
+def test_scp_upload_rewrites_guest_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(
+        cli_module,
+        "run_scp",
+        lambda args, debug=False: calls.append(args) or 0,
+    )
+
+    result = runner.invoke(cli, ["scp", "./settings.talon", "guest:/Users/lume/.talon/user/settings.talon"])
+
+    assert result.exit_code == 0
+    assert calls == [["./settings.talon", "lume@192.168.64.10:/Users/lume/.talon/user/settings.talon"]]
+
+
+def test_scp_download_rewrites_guest_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(
+        cli_module,
+        "run_scp",
+        lambda args, debug=False: calls.append(args) or 0,
+    )
+
+    result = runner.invoke(cli, ["scp", "guest:/tmp/out.png", "/tmp/out.png"])
+
+    assert result.exit_code == 0
+    assert calls == [["lume@192.168.64.10:/tmp/out.png", "/tmp/out.png"]]
+
+
+def test_scp_rejects_transport_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["scp", "-S", "ssh", "./settings.talon", "guest:/tmp/settings.talon"])
+
+    assert result.exit_code == 1
+    assert "Option not allowed for VM-only transfer safety: -S" in result.output
+
+
+def test_scp_rejects_guest_to_guest(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["scp", "guest:/tmp/a", "guest:/tmp/b"])
+
+    assert result.exit_code == 1
+    assert "Guest-to-guest transfers are not allowed" in result.output
+
+
 def test_repl_waits_for_socket_then_runs_piped_script(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     waits: list[tuple[str, float]] = []
@@ -481,7 +626,7 @@ def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:
     return len(payload).to_bytes(4, "big") + chunk_type + payload + crc
 
 
-def test_run_rsync_to_guest_rewrites_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_rsync_uses_fixed_vm_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     recorded: list[list[str]] = []
 
     def fake_run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess[bytes]:
@@ -490,7 +635,7 @@ def test_run_rsync_to_guest_rewrites_destination(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr("mimic_cli.transport.subprocess.run", fake_run)
 
-    returncode = run_rsync_to_guest("192.168.64.10", ["-av", "src/", "/tmp/dest"])
+    returncode = run_rsync(["-av", "src/", "lume@192.168.64.10:/tmp/dest"])
 
     assert returncode == 0
     assert recorded == [
@@ -501,5 +646,47 @@ def test_run_rsync_to_guest_rewrites_destination(monkeypatch: pytest.MonkeyPatch
             "-av",
             "src/",
             "lume@192.168.64.10:/tmp/dest",
+        ]
+    ]
+
+
+def test_run_scp_uses_fixed_vm_ssh_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[list[str]] = []
+
+    def fake_run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess[bytes]:
+        recorded.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("mimic_cli.transport.subprocess.run", fake_run)
+
+    returncode = run_scp(["./settings.talon", "lume@192.168.64.10:/tmp/settings.talon"])
+
+    assert returncode == 0
+    assert recorded == [
+        [
+            "sshpass",
+            "-p",
+            "lume",
+            "scp",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "BatchMode=no",
+            "-o",
+            "NumberOfPasswordPrompts=1",
+            "-o",
+            "PasswordAuthentication=yes",
+            "-o",
+            "KbdInteractiveAuthentication=no",
+            "-o",
+            "PreferredAuthentications=password",
+            "-o",
+            "PubkeyAuthentication=no",
+            "./settings.talon",
+            "lume@192.168.64.10:/tmp/settings.talon",
         ]
     ]

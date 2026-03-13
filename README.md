@@ -30,7 +30,7 @@ Typical workflow:
 
 ```bash
 mimic-cli start
-mimic-cli rsync -av ~/.talon/user/ /Users/lume/.talon/user/
+mimic-cli rsync -av ~/.talon/user/ guest:/Users/lume/.talon/user/
 mimic-cli mimic "focus chrome"
 mimic-cli screenshot /tmp/talon.png
 mimic-cli stop
@@ -40,6 +40,7 @@ General guest access:
 
 ```bash
 mimic-cli exec -- whoami
+mimic-cli scp guest:/tmp/out.png /tmp/out.png
 printf 'print(1 + 1)\n' | mimic-cli repl
 ```
 

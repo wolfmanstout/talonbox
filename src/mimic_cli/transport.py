@@ -70,6 +70,16 @@ def _rsync_shell() -> str:
     )
 
 
+def _scp_base() -> list[str]:
+    return [
+        "sshpass",
+        "-p",
+        SSH_PASSWORD,
+        "scp",
+        *SSH_OPTIONS,
+    ]
+
+
 def _remote_shell_command(command: str) -> str:
     return f"sh -lc {shlex.quote(command)}"
 
@@ -224,20 +234,29 @@ def wait_for_talon_repl(
     )
 
 
-def run_rsync_to_guest(
-    ip_address: str,
+def run_rsync(
     args: list[str],
     *,
     debug: bool = False,
 ) -> int:
-    remote_destination = f"{SSH_USERNAME}@{ip_address}:{args[-1]}"
     cmd = [
         "rsync",
         "-e",
         _rsync_shell(),
-        *args[:-1],
-        remote_destination,
+        *args,
     ]
+    if debug:
+        _debug_log(debug, f"+ {_format_command(cmd)}")
+    result = subprocess.run(cmd, check=False)
+    return result.returncode
+
+
+def run_scp(
+    args: list[str],
+    *,
+    debug: bool = False,
+) -> int:
+    cmd = [*_scp_base(), *args]
     if debug:
         _debug_log(debug, f"+ {_format_command(cmd)}")
     result = subprocess.run(cmd, check=False)
