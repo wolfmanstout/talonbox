@@ -12,7 +12,11 @@ import click
 
 from . import lume
 from .state import StateRecord, clear_state, load_state, save_state
-from .talon import build_mimic_payload, build_screenshot_payload
+from .talon import (
+    build_mimic_payload,
+    build_repl_exec_payload,
+    build_screenshot_payload,
+)
 from .transport import (
     RemoteCommandError,
     TransportError,
@@ -20,7 +24,6 @@ from .transport import (
     probe_ssh,
     run_remote_command_streaming,
     run_remote_repl,
-    run_remote_repl_streaming,
     run_remote_shell,
     run_remote_shell_streaming,
     run_rsync_to_guest,
@@ -541,20 +544,13 @@ def repl(ctx: Context, code: str | None) -> None:
     if code is None:
         if sys.stdin.isatty():
             _raise_click_error("No code provided. Pass CODE or pipe Python into stdin.")
-        returncode = run_remote_repl_streaming(
-            info.ip_address,
-            debug=ctx.debug,
-        )
-    else:
-        payload = code
-        if not payload.endswith("\n"):
-            payload += "\n"
-        returncode = run_remote_repl(
-            info.ip_address,
-            payload,
-            debug=ctx.debug,
-            stream_output=True,
-        )
+        code = sys.stdin.read()
+    returncode = run_remote_repl(
+        info.ip_address,
+        build_repl_exec_payload(code),
+        debug=ctx.debug,
+        stream_output=True,
+    )
     if returncode:
         raise click.exceptions.Exit(returncode)
 

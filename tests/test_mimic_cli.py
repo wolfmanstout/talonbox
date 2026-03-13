@@ -12,7 +12,7 @@ from mimic_cli import lume as lume_module
 from mimic_cli.cli import cli
 from mimic_cli.lume import VmInfo
 from mimic_cli.state import StateRecord, state_paths
-from mimic_cli.talon import build_mimic_payload
+from mimic_cli.talon import build_mimic_payload, build_repl_exec_payload
 from mimic_cli.transport import run_rsync_to_guest
 
 
@@ -303,10 +303,10 @@ def test_exec_single_argument_uses_shell_string(monkeypatch: pytest.MonkeyPatch)
     assert calls == [("192.168.64.10", "ps aux | grep safari")]
 
 
-def test_repl_waits_for_socket_then_runs_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repl_waits_for_socket_then_runs_piped_script(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     waits: list[tuple[str, float]] = []
-    streams: list[tuple[str, bool]] = []
+    payloads: list[tuple[str, str, bool]] = []
     monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
     monkeypatch.setattr(
         cli_module,
@@ -315,15 +315,21 @@ def test_repl_waits_for_socket_then_runs_payload(monkeypatch: pytest.MonkeyPatch
     )
     monkeypatch.setattr(
         cli_module,
-        "run_remote_repl_streaming",
-        lambda ip, debug=False: streams.append((ip, debug)) or 0,
+        "run_remote_repl",
+        lambda ip, payload, debug=False, stream_output=False: payloads.append((ip, payload, stream_output)) or 0,
     )
 
-    result = runner.invoke(cli, ["repl"], input="print(1+1)\n")
+    result = runner.invoke(cli, ["repl"], input="if True:\n    print(1)\nprint(2)\n")
 
     assert result.exit_code == 0
     assert waits == [("192.168.64.10", cli_module.TALON_REPL_TIMEOUT_SECONDS)]
-    assert streams == [("192.168.64.10", False)]
+    assert payloads == [
+        (
+            "192.168.64.10",
+            build_repl_exec_payload("if True:\n    print(1)\nprint(2)\n"),
+            True,
+        )
+    ]
 
 
 def test_repl_accepts_inline_code(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -340,7 +346,7 @@ def test_repl_accepts_inline_code(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(cli, ["repl", "print(1+1)"])
 
     assert result.exit_code == 0
-    assert payloads == [("192.168.64.10", "print(1+1)\n", True)]
+    assert payloads == [("192.168.64.10", build_repl_exec_payload("print(1+1)"), True)]
 
 
 def test_mimic_uses_python_escaped_payload(monkeypatch: pytest.MonkeyPatch) -> None:
