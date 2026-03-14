@@ -356,6 +356,44 @@ def test_rsync_download_rewrites_guest_source(monkeypatch: pytest.MonkeyPatch) -
     assert calls == [["-av", "lume@192.168.64.10:/Users/lume/Pictures/", "./guest-pictures/"]]
 
 
+def test_rsync_allows_upload_from_outside_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(
+        cli_module,
+        "run_rsync",
+        lambda args, debug=False: calls.append(args) or 0,
+    )
+
+    result = runner.invoke(cli, ["rsync", "-av", "/Users/jwstout/projects/wolfmanstout_talon/", "guest:/tmp/wolfmanstout_talon/"])
+
+    assert result.exit_code == 0
+    assert calls == [["-av", "/Users/jwstout/projects/wolfmanstout_talon/", "lume@192.168.64.10:/tmp/wolfmanstout_talon/"]]
+
+
+def test_rsync_rejects_download_outside_writable_sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(cli_module, "_local_write_roots", lambda: (tmp_path / "allowed",))
+
+    result = runner.invoke(cli, ["rsync", "-av", "guest:/tmp/out.txt", "/Users/jwstout/Downloads/out.txt"])
+
+    assert result.exit_code == 1
+    assert "outside the writable sandbox" in result.output
+
+
+def test_scp_rejects_download_outside_writable_sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(cli_module, "_local_write_roots", lambda: (tmp_path / "allowed",))
+
+    result = runner.invoke(cli, ["scp", "guest:/tmp/out.txt", "/Users/jwstout/Desktop/out.txt"])
+
+    assert result.exit_code == 1
+    assert "outside the writable sandbox" in result.output
+
+
 def test_rsync_rejects_local_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))

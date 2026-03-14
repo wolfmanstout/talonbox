@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import shlex
 import sys
+import tempfile
 import uuid
 import zlib
 from collections.abc import Sequence
@@ -300,6 +302,8 @@ def _prepare_transfer_args(
         if source_kind == "local":
             _raise_click_error("Local-to-local transfers are not allowed; use guest: paths for the VM")
         _raise_click_error("Guest-to-guest transfers are not allowed")
+    if destination.kind == "local":
+        _ensure_local_write_allowed(destination.path)
 
     rewritten = [
         _rewrite_transfer_operand(info.ip_address, operand)
@@ -312,6 +316,44 @@ def _rewrite_transfer_operand(ip_address: str, operand: TransferOperand) -> str:
     if operand.kind == "local":
         return operand.path
     return f"{SSH_USERNAME}@{ip_address}:{operand.path}"
+
+
+def _ensure_local_write_allowed(raw_path: str) -> None:
+    destination = Path(raw_path).expanduser()
+    if not destination.is_absolute():
+        destination = Path.cwd() / destination
+
+    probe = destination if destination.exists() and destination.is_dir() else destination.parent
+    resolved_probe = probe.resolve(strict=False)
+    allowed_roots = _local_write_roots()
+    if any(_is_relative_to(resolved_probe, root) for root in allowed_roots):
+        return
+
+    allowed_display = ", ".join(str(root) for root in allowed_roots)
+    _raise_click_error(
+        "Local download destination is outside the writable sandbox. "
+        f"Allowed roots: {allowed_display}"
+    )
+
+
+def _local_write_roots() -> tuple[Path, ...]:
+    roots = {
+        Path.cwd().resolve(strict=False),
+        Path("/tmp").resolve(strict=False),
+        Path(tempfile.gettempdir()).resolve(strict=False),
+    }
+    tmpdir = os.environ.get("TMPDIR")
+    if tmpdir:
+        roots.add(Path(tmpdir).expanduser().resolve(strict=False))
+    return tuple(sorted(roots))
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _is_blank_png(filepath: Path) -> bool:
@@ -649,7 +691,9 @@ def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
     help=(
         "Run rsync between the host and the guest VM.\n\n"
         "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
-        "and only `guest:` remote paths are allowed. No other remotes are permitted."
+        "and only `guest:` remote paths are allowed. No other remotes are permitted.\n\n"
+        "Local sources may be read from anywhere, but local download destinations must stay "
+        "inside the writable sandbox."
     ),
     examples=(
         "  mimic-cli rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
@@ -679,7 +723,9 @@ def rsync(ctx: Context, args: tuple[str, ...]) -> None:
     help=(
         "Run scp between the host and the guest VM.\n\n"
         "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
-        "and only `guest:` remote paths are allowed. No other remotes are permitted."
+        "and only `guest:` remote paths are allowed. No other remotes are permitted.\n\n"
+        "Local sources may be read from anywhere, but local download destinations must stay "
+        "inside the writable sandbox."
     ),
     examples=(
         "  mimic-cli scp ./settings.talon guest:/Users/lume/.talon/user/settings.talon",
