@@ -6,9 +6,11 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .state import StateRecord, state_paths
 
@@ -187,16 +189,28 @@ def _read_log_tail(log_path: Path | None) -> str:
     return lines[-1]
 
 
-def _parse_lume_json(output: str) -> object:
+def _parse_lume_json(output: str) -> list[dict[str, Any]]:
     try:
-        return json.loads(output)
+        parsed = json.loads(output)
     except json.JSONDecodeError:
         lines = output.splitlines()
         for index, line in enumerate(lines):
             stripped = line.lstrip()
             if stripped == "[" or stripped.startswith("[{") or stripped.startswith("{"):
-                return json.loads("\n".join(lines[index:]))
-        raise
+                parsed = json.loads("\n".join(lines[index:]))
+                break
+        else:
+            raise
+
+    if not isinstance(parsed, list):
+        raise json.JSONDecodeError("Expected a JSON list", output, 0)
+
+    records: list[dict[str, Any]] = []
+    for record in parsed:
+        if not isinstance(record, Mapping):
+            raise json.JSONDecodeError("Expected JSON objects in list", output, 0)
+        records.append(dict(record))
+    return records
 
 
 def _collect_vm_process_groups(name: str, *, pid: int | None, debug: bool) -> set[int]:

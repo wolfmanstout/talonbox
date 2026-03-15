@@ -7,6 +7,7 @@ import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, NoReturn
 
 import click
 
@@ -99,7 +100,7 @@ SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
 
 class TalonboxCommand(click.Command):
     def __init__(
-        self, *args: object, examples: Sequence[str] | None = None, **kwargs: object
+        self, *args: Any, examples: Sequence[str] | None = None, **kwargs: Any
     ) -> None:
         self.examples = list(examples or [])
         super().__init__(*args, **kwargs)
@@ -124,7 +125,7 @@ class TalonboxGroup(click.Group):
     command_class = TalonboxCommand
 
     def __init__(
-        self, *args: object, examples: Sequence[str] | None = None, **kwargs: object
+        self, *args: Any, examples: Sequence[str] | None = None, **kwargs: Any
     ) -> None:
         self.examples = list(examples or [])
         super().__init__(*args, **kwargs)
@@ -193,11 +194,11 @@ class TransferOperand:
     path: str
 
 
-def _raise_click_error(message: str) -> None:
+def _raise_click_error(message: str) -> NoReturn:
     raise click.ClickException(message)
 
 
-def _handle_transport_error(error: Exception) -> None:
+def _handle_transport_error(error: Exception) -> NoReturn:
     _raise_click_error(str(error))
 
 
@@ -216,6 +217,12 @@ def _require_running_vm(ctx: Context) -> lume.VmInfo:
     if info.status != "running" or not info.ip_address:
         _raise_click_error(f"VM is not running: {ctx.vm}")
     return info
+
+
+def _require_vm_ip(info: lume.VmInfo, vm: str) -> str:
+    if not info.ip_address:
+        _raise_click_error(f"VM is not running: {vm}")
+    return info.ip_address
 
 
 def _print_vm_info(info: lume.VmInfo) -> None:
@@ -335,8 +342,9 @@ def _prepare_transfer_args(
             path=str(_normalize_local_output_path(destination.path)),
         )
 
+    ip_address = _require_vm_ip(info, ctx.vm)
     rewritten = [
-        _rewrite_transfer_operand(info.ip_address, operand)
+        _rewrite_transfer_operand(ip_address, operand)
         for operand in [*sources, destination]
     ]
     return [*passthrough, *rewritten]
@@ -576,6 +584,7 @@ def start(ctx: Context) -> None:
     if info.status != "stopped":
         _raise_click_error(f"VM is not stopped: {ctx.vm} ({info.status})")
 
+    state: StateRecord | None = None
     try:
         state = lume.spawn_vm(ctx.vm, debug=ctx.debug)
         save_state(state)
@@ -586,10 +595,11 @@ def start(ctx: Context) -> None:
             pid=state.pid,
             log_path=Path(state.log_path),
         )
-        probe_ssh(ready_vm.ip_address, debug=ctx.debug, timeout=SSH_TIMEOUT_SECONDS)
-        _bootstrap_talon(ready_vm.ip_address, debug=ctx.debug)
+        ready_ip = _require_vm_ip(ready_vm, ctx.vm)
+        probe_ssh(ready_ip, debug=ctx.debug, timeout=SSH_TIMEOUT_SECONDS)
+        _bootstrap_talon(ready_ip, debug=ctx.debug)
     except (lume.LumeError, RemoteCommandError, TransportError) as error:
-        if "state" in locals():
+        if state is not None:
             _cleanup_failed_start(ctx, state)
         _handle_transport_error(error)
 
@@ -614,7 +624,7 @@ def restart_talon(ctx: Context) -> None:
     info = _require_running_vm(ctx)
     try:
         _restart_talon(
-            info.ip_address,
+            _require_vm_ip(info, ctx.vm),
             debug=ctx.debug,
             wipe_user_dir=False,
             clean_logs=True,
@@ -693,15 +703,16 @@ def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
     if not command:
         _raise_click_error("No command provided")
     info = _require_running_vm(ctx)
+    ip_address = _require_vm_ip(info, ctx.vm)
     if len(command) == 1:
         returncode = run_remote_command_streaming(
-            info.ip_address,
+            ip_address,
             command[0],
             debug=ctx.debug,
         )
     else:
         returncode = run_remote_shell_streaming(
-            info.ip_address,
+            ip_address,
             list(command),
             debug=ctx.debug,
         )
@@ -789,8 +800,9 @@ def scp(ctx: Context, args: tuple[str, ...]) -> None:
 @pass_context
 def repl(ctx: Context, code: str | None) -> None:
     info = _require_running_vm(ctx)
+    ip_address = _require_vm_ip(info, ctx.vm)
     wait_for_talon_repl(
-        info.ip_address,
+        ip_address,
         debug=ctx.debug,
         timeout=TALON_REPL_TIMEOUT_SECONDS,
     )
@@ -798,8 +810,9 @@ def repl(ctx: Context, code: str | None) -> None:
         if sys.stdin.isatty():
             _raise_click_error("No code provided. Pass CODE or pipe Python into stdin.")
         code = sys.stdin.read()
+    assert code is not None
     returncode = run_remote_repl(
-        info.ip_address,
+        ip_address,
         build_repl_exec_payload(code),
         debug=ctx.debug,
         stream_output=True,
@@ -820,13 +833,14 @@ def repl(ctx: Context, code: str | None) -> None:
 @pass_context
 def mimic(ctx: Context, command: str) -> None:
     info = _require_running_vm(ctx)
+    ip_address = _require_vm_ip(info, ctx.vm)
     wait_for_talon_repl(
-        info.ip_address,
+        ip_address,
         debug=ctx.debug,
         timeout=TALON_REPL_TIMEOUT_SECONDS,
     )
     returncode = run_remote_repl(
-        info.ip_address,
+        ip_address,
         build_mimic_payload(command),
         debug=ctx.debug,
     )
@@ -851,24 +865,25 @@ def mimic(ctx: Context, command: str) -> None:
 @pass_context
 def screenshot(ctx: Context, filepath: Path) -> None:
     info = _require_running_vm(ctx)
+    ip_address = _require_vm_ip(info, ctx.vm)
     filepath = _normalize_local_output_path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
     remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}.png"
     try:
         wait_for_talon_repl(
-            info.ip_address,
+            ip_address,
             debug=ctx.debug,
             timeout=TALON_REPL_TIMEOUT_SECONDS,
         )
         returncode = run_remote_repl(
-            info.ip_address,
+            ip_address,
             build_screenshot_payload(remote_path),
             debug=ctx.debug,
         )
         if returncode:
             raise click.exceptions.Exit(returncode)
         download_from_guest(
-            info.ip_address,
+            ip_address,
             remote_path,
             filepath,
             debug=ctx.debug,
@@ -884,7 +899,7 @@ def screenshot(ctx: Context, filepath: Path) -> None:
     finally:
         try:
             run_remote_shell(
-                info.ip_address,
+                ip_address,
                 f'rm -f "{remote_path}"',
                 debug=ctx.debug,
             )
