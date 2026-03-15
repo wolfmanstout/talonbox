@@ -1,5 +1,5 @@
 [project]
-name = "mimic-cli"
+name = "talonbox"
 version = "0.1.0"
 description = "Control Talon in a macOS VM."
 readme = "README.md"
@@ -17,13 +17,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.urls]
-Homepage = "https://github.com/wolfmanstout/mimic-cli"
-Changelog = "https://github.com/wolfmanstout/mimic-cli/releases"
-Issues = "https://github.com/wolfmanstout/mimic-cli/issues"
-CI = "https://github.com/wolfmanstout/mimic-cli/actions"
+Homepage = "https://github.com/wolfmanstout/talonbox"
+Changelog = "https://github.com/wolfmanstout/talonbox/releases"
+Issues = "https://github.com/wolfmanstout/talonbox/issues"
+CI = "https://github.com/wolfmanstout/talonbox/actions"
 
 [project.scripts]
-mimic-cli = "mimic_cli.cli:cli"
+talonbox = "talonbox.cli:cli"
 
 [dependency-groups]
 dev = [

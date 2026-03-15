@@ -1,47 +1,47 @@
 prefix_rule(
-    pattern = ["uv", "run", "mimic-cli", "start"],
+    pattern = ["uv", "run", "talonbox", "start"],
     decision = "allow",
     justification = "Starts the VM and bootstraps Talon over SSH, which needs network access and host-side VM state changes.",
 )
 
 prefix_rule(
-    pattern = ["uv", "run", "mimic-cli", "stop"],
+    pattern = ["uv", "run", "talonbox", "stop"],
     decision = "allow",
     justification = "Stops the VM, which changes host-side VM state outside the sandbox.",
 )
 
 prefix_rule(
-    pattern = ["uv", "run", "mimic-cli", "exec"],
+    pattern = ["uv", "run", "talonbox", "exec"],
     decision = "allow",
     justification = "Runs commands in the guest over SSH, which needs network access.",
 )
 
 prefix_rule(
-    pattern = ["uv", "run", "mimic-cli", "restart-talon"],
+    pattern = ["uv", "run", "talonbox", "restart-talon"],
     decision = "allow",
     justification = "Runs commands in the guest over SSH, which needs network access.",
 )
 
 prefix_rule(
-    pattern = ["uv", "run", "mimic-cli", "rsync"],
+    pattern = ["uv", "run", "talonbox", "rsync"],
     decision = "allow",
     justification = "Copies files to the guest over rsync/SSH, which needs network access.",
 )
 
 prefix_rule(
-    pattern = ["uv", "run", "mimic-cli", "repl"],
+    pattern = ["uv", "run", "talonbox", "repl"],
     decision = "allow",
     justification = "Connects to the guest Talon REPL over SSH, which needs network access.",
 )
 
 prefix_rule(
-    pattern = ["uv", "run", "mimic-cli", "mimic"],
+    pattern = ["uv", "run", "talonbox", "mimic"],
     decision = "allow",
     justification = "Sends Talon commands to the guest over SSH, which needs network access.",
 )
 
 prefix_rule(
-    pattern = ["uv", "run", "mimic-cli", "screenshot"],
+    pattern = ["uv", "run", "talonbox", "screenshot"],
     decision = "allow",
     justification = "Captures in the guest and downloads over SSH/rsync, which needs network access.",
 )

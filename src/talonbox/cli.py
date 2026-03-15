@@ -87,7 +87,7 @@ SCP_VALUE_OPTIONS = {"-c", "-D", "-i", "-l", "-o", "-P", "-S", "-X"}
 SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
 
 
-class MimicCommand(click.Command):
+class TalonboxCommand(click.Command):
     def __init__(self, *args: object, examples: Sequence[str] | None = None, **kwargs: object) -> None:
         self.examples = list(examples or [])
         super().__init__(*args, **kwargs)
@@ -108,8 +108,8 @@ class MimicCommand(click.Command):
                 formatter.write_text(example)
 
 
-class MimicGroup(click.Group):
-    command_class = MimicCommand
+class TalonboxGroup(click.Group):
+    command_class = TalonboxCommand
 
     def __init__(self, *args: object, examples: Sequence[str] | None = None, **kwargs: object) -> None:
         self.examples = list(examples or [])
@@ -427,7 +427,7 @@ def _restart_talon(
     if clean_logs:
         run_remote_shell(
             ip_address,
-            f'mkdir -p "$HOME/.talon" && : > {TALON_LOG} && : > /tmp/mimic-talon.log',
+            f'mkdir -p "$HOME/.talon" && : > {TALON_LOG} && : > /tmp/talonbox-talon.log',
             debug=debug,
         )
     run_remote_shell(ip_address, 'mkdir -p "$HOME/.talon/user"', debug=debug)
@@ -466,10 +466,10 @@ def _bootstrap_talon(ip_address: str, debug: bool) -> None:
 
 
 def _terminal_launch_command() -> str:
-    script_path = "/tmp/mimic-launch.command"
+    script_path = "/tmp/talonbox-launch.command"
     script_body = (
         "#!/bin/sh\n"
-        f"exec arch -x86_64 {TALON_BINARY} >/tmp/mimic-talon.log 2>&1\n"
+        f"exec arch -x86_64 {TALON_BINARY} >/tmp/talonbox-talon.log 2>&1\n"
     )
     return (
         f"printf %s {shlex.quote(script_body)} > {shlex.quote(script_path)} && "
@@ -489,8 +489,8 @@ def _cleanup_failed_start(ctx: Context, state: StateRecord) -> None:
 
 
 @click.group(
-    name="mimic-cli",
-    cls=MimicGroup,
+    name="talonbox",
+    cls=TalonboxGroup,
     context_settings={"max_content_width": 100},
     help=(
         "Minimal Talon VM control primitives for coding agents.\n\n"
@@ -500,23 +500,23 @@ def _cleanup_failed_start(ctx: Context, state: StateRecord) -> None:
         "the VM."
     ),
     examples=(
-        "  mimic-cli start",
-        "  mimic-cli restart-talon",
-        "  mimic-cli exec -- uname -a",
-        "  mimic-cli rsync -av ~/.talon/user/ guest:/Users/lume/.talon/user/",
-        "  mimic-cli scp guest:/tmp/out.png /tmp/out.png",
-        "  mimic-cli mimic 'focus chrome'",
-        "  mimic-cli screenshot /tmp/talon.png",
+        "  talonbox start",
+        "  talonbox restart-talon",
+        "  talonbox exec -- uname -a",
+        "  talonbox rsync -av ~/.talon/user/ guest:/Users/lume/.talon/user/",
+        "  talonbox scp guest:/tmp/out.png /tmp/out.png",
+        "  talonbox mimic 'focus chrome'",
+        "  talonbox screenshot /tmp/talon.png",
     ),
 )
 @click.option("--vm", default=DEFAULT_VM, show_default=True, help="Target VM name.")
 @click.option(
     "--debug",
     is_flag=True,
-    envvar="MIMIC_DEBUG",
-    help="Print invoked commands and failure details to stderr. Can also be enabled with MIMIC_DEBUG=1.",
+    envvar="TALONBOX_DEBUG",
+    help="Print invoked commands and failure details to stderr. Can also be enabled with TALONBOX_DEBUG=1.",
 )
-@click.version_option(prog_name="mimic-cli")
+@click.version_option(prog_name="talonbox")
 @click.pass_context
 def cli(click_ctx: click.Context, vm: str, debug: bool) -> None:
     click_ctx.obj = Context(vm=vm, debug=debug)
@@ -525,7 +525,7 @@ def cli(click_ctx: click.Context, vm: str, debug: bool) -> None:
 @cli.command(
     short_help="Create or provision the test VM (stub for now).",
     help="Create or provision the Talon test VM.\n\nThis command is reserved for future setup automation.",
-    examples=("  mimic-cli setup",),
+    examples=("  talonbox setup",),
 )
 def setup() -> None:
     _raise_click_error("setup is not implemented yet")
@@ -541,8 +541,8 @@ def setup() -> None:
         "The command fails if the VM is already running."
     ),
     examples=(
-        "  mimic-cli start",
-        "  mimic-cli --vm talon-test --debug start",
+        "  talonbox start",
+        "  talonbox --vm talon-test --debug start",
     ),
 )
 @pass_context
@@ -578,12 +578,12 @@ def start(ctx: Context) -> None:
     short_help="Restart Talon inside the running VM and reset Talon logs.",
     help=(
         "Restart Talon inside the running VM without rebooting the VM.\n\n"
-        "This truncates `~/.talon/talon.log` and `/tmp/mimic-talon.log`, then relaunches "
+        "This truncates `~/.talon/talon.log` and `/tmp/talonbox-talon.log`, then relaunches "
         "Talon under Rosetta through Terminal so screen capture permissions still apply."
     ),
     examples=(
-        "  mimic-cli restart-talon",
-        "  mimic-cli --debug restart-talon",
+        "  talonbox restart-talon",
+        "  talonbox --debug restart-talon",
     ),
 )
 @pass_context
@@ -602,10 +602,10 @@ def restart_talon(ctx: Context) -> None:
 
 @cli.command(
     short_help="Stop the VM if it is running.",
-    help="Stop the VM and clear mimic-cli local state. Safe to run repeatedly.",
+    help="Stop the VM and clear talonbox local state. Safe to run repeatedly.",
     examples=(
-        "  mimic-cli stop",
-        "  mimic-cli --vm talon-test stop",
+        "  talonbox stop",
+        "  talonbox --vm talon-test stop",
     ),
 )
 @pass_context
@@ -638,8 +638,8 @@ def stop(ctx: Context) -> None:
         "use in sandboxed environments that permit running `lume ls`."
     ),
     examples=(
-        "  mimic-cli show",
-        "  mimic-cli --vm talon-test show",
+        "  talonbox show",
+        "  talonbox --vm talon-test show",
     ),
 )
 @pass_context
@@ -654,13 +654,13 @@ def show(ctx: Context) -> None:
     short_help="Run a command on the guest via SSH.",
     help=(
         "Run a command on the guest VM over SSH.\n\n"
-        "Place `--` before the remote command so mimic-cli stops parsing options.\n\n"
+        "Place `--` before the remote command so talonbox stops parsing options.\n\n"
         "For shell pipelines or redirects, pass a single quoted shell string."
     ),
     examples=(
-        "  mimic-cli exec -- whoami",
-        "  mimic-cli exec -- sh -lc 'ls -la ~/.talon'",
-        '  mimic-cli exec -- "ps aux | grep Safari"',
+        "  talonbox exec -- whoami",
+        "  talonbox exec -- sh -lc 'ls -la ~/.talon'",
+        '  talonbox exec -- "ps aux | grep Safari"',
     ),
 )
 @click.argument("command", nargs=-1, type=click.UNPROCESSED, metavar="COMMAND...")
@@ -696,8 +696,8 @@ def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
         "inside the writable sandbox."
     ),
     examples=(
-        "  mimic-cli rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
-        "  mimic-cli rsync -av guest:/Users/lume/Pictures/ ./guest-pictures/",
+        "  talonbox rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
+        "  talonbox rsync -av guest:/Users/lume/Pictures/ ./guest-pictures/",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
@@ -728,8 +728,8 @@ def rsync(ctx: Context, args: tuple[str, ...]) -> None:
         "inside the writable sandbox."
     ),
     examples=(
-        "  mimic-cli scp ./settings.talon guest:/Users/lume/.talon/user/settings.talon",
-        "  mimic-cli scp guest:/tmp/out.png /tmp/out.png",
+        "  talonbox scp ./settings.talon guest:/Users/lume/.talon/user/settings.talon",
+        "  talonbox scp guest:/tmp/out.png /tmp/out.png",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="SCP_ARGS...")
@@ -757,8 +757,8 @@ def scp(ctx: Context, args: tuple[str, ...]) -> None:
         "non-interactive."
     ),
     examples=(
-        "  mimic-cli repl 'print(1+1)'",
-        "  printf 'print(1+1)\\n' | mimic-cli repl",
+        "  talonbox repl 'print(1+1)'",
+        "  printf 'print(1+1)\\n' | talonbox repl",
     ),
 )
 @click.argument("code", required=False, metavar="[CODE]")
@@ -788,8 +788,8 @@ def repl(ctx: Context, code: str | None) -> None:
     short_help="Run a voice command through Talon's mimic().",
     help="Send one phrase to the guest Talon REPL as `mimic(<phrase>)`.",
     examples=(
-        "  mimic-cli mimic 'focus chrome'",
-        "  mimic-cli mimic 'tab close'",
+        "  talonbox mimic 'focus chrome'",
+        "  talonbox mimic 'tab close'",
     ),
 )
 @click.argument("command", metavar="PHRASE")
@@ -817,8 +817,8 @@ def mimic(ctx: Context, command: str) -> None:
         "download it to the host path you provide, and remove the guest temp file."
     ),
     examples=(
-        "  mimic-cli screenshot /tmp/talon.png",
-        "  mimic-cli --vm talon-test screenshot ./artifacts/guest-screen.png",
+        "  talonbox screenshot /tmp/talon.png",
+        "  talonbox --vm talon-test screenshot ./artifacts/guest-screen.png",
     ),
 )
 @click.argument("filepath", metavar="HOST_PATH", type=click.Path(dir_okay=False, path_type=Path))
@@ -826,7 +826,7 @@ def mimic(ctx: Context, command: str) -> None:
 def screenshot(ctx: Context, filepath: Path) -> None:
     info = _require_running_vm(ctx)
     filepath.parent.mkdir(parents=True, exist_ok=True)
-    remote_path = f"/tmp/mimic-screenshot-{uuid.uuid4().hex}.png"
+    remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}.png"
     try:
         wait_for_talon_repl(
             info.ip_address,

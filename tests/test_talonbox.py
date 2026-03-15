@@ -7,25 +7,25 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from mimic_cli import cli as cli_module
-from mimic_cli import lume as lume_module
-from mimic_cli.cli import cli
-from mimic_cli.lume import VmInfo
-from mimic_cli.state import StateRecord, state_paths
-from mimic_cli.talon import build_mimic_payload, build_repl_exec_payload
-from mimic_cli.transport import run_rsync, run_scp
+from talonbox import cli as cli_module
+from talonbox import lume as lume_module
+from talonbox.cli import cli
+from talonbox.lume import VmInfo
+from talonbox.state import StateRecord, state_paths
+from talonbox.talon import build_mimic_payload, build_repl_exec_payload
+from talonbox.transport import run_rsync, run_scp
 
 
 @pytest.fixture(autouse=True)
 def state_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("MIMIC_CLI_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("TALONBOX_STATE_DIR", str(tmp_path))
 
 
 def test_version() -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
-    assert result.output.startswith("mimic-cli, version ")
+    assert result.output.startswith("talonbox, version ")
 
 
 def test_root_help_groups_commands_and_examples() -> None:
@@ -41,7 +41,7 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "Talon RPC:" in result.output
     assert "scp" in result.output
     assert "restart-talon" in result.output
-    assert "mimic-cli exec -- uname -a" in result.output
+    assert "talonbox exec -- uname -a" in result.output
 
 
 def test_exec_help_explains_double_dash_usage() -> None:
@@ -51,7 +51,7 @@ def test_exec_help_explains_double_dash_usage() -> None:
 
     assert result.exit_code == 0
     assert "Place `--` before the remote command" in result.output
-    assert "mimic-cli exec -- whoami" in result.output
+    assert "talonbox exec -- whoami" in result.output
 
 
 def test_mimic_help_works() -> None:
@@ -172,9 +172,9 @@ def test_terminal_launch_command_runs_talon_via_arch_in_terminal() -> None:
     command = cli_module._terminal_launch_command()
 
     assert "printf %s " in command
-    assert "chmod +x /tmp/mimic-launch.command" in command
-    assert "open -a Terminal /tmp/mimic-launch.command" in command
-    assert "exec arch -x86_64 /Applications/Talon.app/Contents/MacOS/Talon >/tmp/mimic-talon.log 2>&1" in command
+    assert "chmod +x /tmp/talonbox-launch.command" in command
+    assert "open -a Terminal /tmp/talonbox-launch.command" in command
+    assert "exec arch -x86_64 /Applications/Talon.app/Contents/MacOS/Talon >/tmp/talonbox-talon.log 2>&1" in command
 
 
 def test_restart_talon_help_mentions_log_reset() -> None:
@@ -588,7 +588,7 @@ def test_screenshot_uses_talon_capture_and_download(monkeypatch: pytest.MonkeyPa
     assert "img.save(path) if hasattr(img, 'save') else img.write_file(path)" in repl_payloads[0]
     assert downloads[0][0] == "192.168.64.10"
     assert downloads[0][2] == target
-    assert cleanup_commands[0].startswith('rm -f "/tmp/mimic-screenshot-')
+    assert cleanup_commands[0].startswith('rm -f "/tmp/talonbox-screenshot-')
 
 
 def test_screenshot_fails_for_blank_png(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -671,7 +671,7 @@ def test_run_rsync_uses_fixed_vm_shell(monkeypatch: pytest.MonkeyPatch) -> None:
         recorded.append(cmd)
         return subprocess.CompletedProcess(cmd, 0)
 
-    monkeypatch.setattr("mimic_cli.transport.subprocess.run", fake_run)
+    monkeypatch.setattr("talonbox.transport.subprocess.run", fake_run)
 
     returncode = run_rsync(["-av", "src/", "lume@192.168.64.10:/tmp/dest"])
 
@@ -695,7 +695,7 @@ def test_run_scp_uses_fixed_vm_ssh_options(monkeypatch: pytest.MonkeyPatch) -> N
         recorded.append(cmd)
         return subprocess.CompletedProcess(cmd, 0)
 
-    monkeypatch.setattr("mimic_cli.transport.subprocess.run", fake_run)
+    monkeypatch.setattr("talonbox.transport.subprocess.run", fake_run)
 
     returncode = run_scp(["./settings.talon", "lume@192.168.64.10:/tmp/settings.talon"])
 

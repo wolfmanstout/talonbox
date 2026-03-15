@@ -5,7 +5,7 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-STATE_DIR_ENV = "MIMIC_CLI_STATE_DIR"
+STATE_DIR_ENV = "TALONBOX_STATE_DIR"
 
 
 @dataclass(slots=True)
@@ -27,7 +27,7 @@ def get_state_dir() -> Path:
     override = os.environ.get(STATE_DIR_ENV)
     if override:
         return Path(override).expanduser()
-    return Path.home() / "Library" / "Application Support" / "mimic-cli"
+    return Path.home() / "Library" / "Application Support" / "talonbox"
 
 
 def state_paths(vm: str) -> StatePaths:

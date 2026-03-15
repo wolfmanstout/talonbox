@@ -1,9 +1,9 @@
-# mimic-cli
+# talonbox
 
-[![PyPI](https://img.shields.io/pypi/v/mimic-cli.svg)](https://pypi.org/project/mimic-cli/)
-[![Changelog](https://img.shields.io/github/v/release/wolfmanstout/mimic-cli?include_prereleases&label=changelog)](https://github.com/wolfmanstout/mimic-cli/releases)
-[![Tests](https://github.com/wolfmanstout/mimic-cli/actions/workflows/test.yml/badge.svg)](https://github.com/wolfmanstout/mimic-cli/actions/workflows/test.yml)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/wolfmanstout/mimic-cli/blob/master/LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/talonbox.svg)](https://pypi.org/project/talonbox/)
+[![Changelog](https://img.shields.io/github/v/release/wolfmanstout/talonbox?include_prereleases&label=changelog)](https://github.com/wolfmanstout/talonbox/releases)
+[![Tests](https://github.com/wolfmanstout/talonbox/actions/workflows/test.yml/badge.svg)](https://github.com/wolfmanstout/talonbox/actions/workflows/test.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/wolfmanstout/talonbox/blob/master/LICENSE)
 
 Control Talon in a macOS VM.
 
@@ -12,42 +12,42 @@ Control Talon in a macOS VM.
 Install this tool using `pip` or `pipx`:
 
 ```bash
-pip install mimic-cli
+pip install talonbox
 ```
 
 ## Usage
 
-`mimic-cli` is a small set of primitives for coding agents that need to stage Talon
+`talonbox` is a small set of primitives for coding agents that need to stage Talon
 changes inside a local Lume VM before touching the host machine.
 
 For top-level help, run:
 
 ```bash
-mimic-cli --help
+talonbox --help
 ```
 
 Typical workflow:
 
 ```bash
-mimic-cli start
-mimic-cli rsync -av ~/.talon/user/ guest:/Users/lume/.talon/user/
-mimic-cli mimic "focus chrome"
-mimic-cli screenshot /tmp/talon.png
-mimic-cli stop
+talonbox start
+talonbox rsync -av ~/.talon/user/ guest:/Users/lume/.talon/user/
+talonbox mimic "focus chrome"
+talonbox screenshot /tmp/talon.png
+talonbox stop
 ```
 
 General guest access:
 
 ```bash
-mimic-cli exec -- whoami
-mimic-cli scp guest:/tmp/out.png /tmp/out.png
-printf 'print(1 + 1)\n' | mimic-cli repl
+talonbox exec -- whoami
+talonbox scp guest:/tmp/out.png /tmp/out.png
+printf 'print(1 + 1)\n' | talonbox repl
 ```
 
 You can also run:
 
 ```bash
-python -m mimic_cli --help
+python -m talonbox --help
 ```
 
 ## Development
@@ -59,8 +59,8 @@ venv and run tests:
 uv run pytest
 ```
 
-To run mimic-cli locally, use:
+To run talonbox locally, use:
 
 ```bash
-uv run mimic-cli
+uv run talonbox
 ```
