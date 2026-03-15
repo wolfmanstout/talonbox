@@ -14,6 +14,16 @@ Use:
 uv tool install . --reinstall
 ```
 
+## Run During Development
+
+When working from this repository, run `talonbox` via `uv run` so commands use the code in the checkout:
+
+```bash
+uv run talonbox ...
+```
+
+Use the installed `talonbox` binary only when you specifically want to verify the system-wide install behavior.
+
 ## Repo Norms
 
 - Keep documentation readable for both humans and coding agents.

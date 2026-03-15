@@ -98,7 +98,9 @@ SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
 
 
 class TalonboxCommand(click.Command):
-    def __init__(self, *args: object, examples: Sequence[str] | None = None, **kwargs: object) -> None:
+    def __init__(
+        self, *args: object, examples: Sequence[str] | None = None, **kwargs: object
+    ) -> None:
         self.examples = list(examples or [])
         super().__init__(*args, **kwargs)
 
@@ -121,7 +123,9 @@ class TalonboxCommand(click.Command):
 class TalonboxGroup(click.Group):
     command_class = TalonboxCommand
 
-    def __init__(self, *args: object, examples: Sequence[str] | None = None, **kwargs: object) -> None:
+    def __init__(
+        self, *args: object, examples: Sequence[str] | None = None, **kwargs: object
+    ) -> None:
         self.examples = list(examples or [])
         super().__init__(*args, **kwargs)
 
@@ -132,7 +136,9 @@ class TalonboxGroup(click.Group):
         self.format_epilog(ctx, formatter)
         self._format_examples(formatter)
 
-    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+    def format_commands(
+        self, ctx: click.Context, formatter: click.HelpFormatter
+    ) -> None:
         emitted: set[str] = set()
         for title, command_names in HELP_COMMAND_GROUPS:
             rows: list[tuple[str, str]] = []
@@ -218,6 +224,8 @@ def _print_vm_info(info: lume.VmInfo) -> None:
         click.echo(f"ip: {info.ip_address}")
         click.echo(f"username: {SSH_USERNAME}")
         click.echo(f"password: {SSH_PASSWORD}")
+        if info.vnc_url:
+            click.echo(f"vnc: {info.vnc_url}")
 
 
 def _split_transfer_args(
@@ -246,7 +254,9 @@ def _split_transfer_args(
         if arg.startswith("--"):
             option, has_value, attached_value = arg.partition("=")
             if option in rejected_options:
-                _raise_click_error(f"Option not allowed for VM-only transfer safety: {option}")
+                _raise_click_error(
+                    f"Option not allowed for VM-only transfer safety: {option}"
+                )
             passthrough.append(arg)
             index += 1
             if has_value or option not in value_options:
@@ -259,7 +269,9 @@ def _split_transfer_args(
 
         short_option = arg[:2]
         if short_option in rejected_options:
-            _raise_click_error(f"Option not allowed for VM-only transfer safety: {short_option}")
+            _raise_click_error(
+                f"Option not allowed for VM-only transfer safety: {short_option}"
+            )
         passthrough.append(arg)
         index += 1
         if short_option not in value_options or len(arg) > 2:
@@ -312,7 +324,9 @@ def _prepare_transfer_args(
     source_kind = next(iter(source_kinds))
     if source_kind == destination.kind:
         if source_kind == "local":
-            _raise_click_error("Local-to-local transfers are not allowed; use guest: paths for the VM")
+            _raise_click_error(
+                "Local-to-local transfers are not allowed; use guest: paths for the VM"
+            )
         _raise_click_error("Guest-to-guest transfers are not allowed")
     if destination.kind == "local":
         destination = TransferOperand(
@@ -478,8 +492,7 @@ def _bootstrap_talon(ip_address: str, debug: bool) -> None:
 def _terminal_launch_command() -> str:
     script_path = "/tmp/talonbox-launch.command"
     script_body = (
-        "#!/bin/sh\n"
-        f"exec arch -x86_64 {TALON_BINARY} >/tmp/talonbox-talon.log 2>&1\n"
+        f"#!/bin/sh\nexec arch -x86_64 {TALON_BINARY} >/tmp/talonbox-talon.log 2>&1\n"
     )
     return (
         f"printf %s {shlex.quote(script_body)} > {shlex.quote(script_path)} && "
@@ -643,7 +656,8 @@ def stop(ctx: Context) -> None:
 @cli.command(
     short_help="Print VM status and connection details without changing anything.",
     help=(
-        "Show whether the VM is running. When it is running, also print IP and SSH credentials.\n\n"
+        "Show whether the VM is running. When it is running, also print IP, SSH credentials, "
+        "and the VNC link.\n\n"
         "This command is read-only: it does not start, stop, or modify the VM, and is safe to "
         "use in sandboxed environments that permit running `lume ls`."
     ),
@@ -831,7 +845,9 @@ def mimic(ctx: Context, command: str) -> None:
         "  talonbox --vm talon-test screenshot /tmp/guest-screen.png",
     ),
 )
-@click.argument("filepath", metavar="HOST_PATH", type=click.Path(dir_okay=False, path_type=Path))
+@click.argument(
+    "filepath", metavar="HOST_PATH", type=click.Path(dir_okay=False, path_type=Path)
+)
 @pass_context
 def screenshot(ctx: Context, filepath: Path) -> None:
     info = _require_running_vm(ctx)

@@ -22,6 +22,7 @@ class VmInfo:
     name: str
     status: str
     ip_address: str | None
+    vnc_url: str | None = None
 
 
 def _debug_log(debug: bool, message: str) -> None:
@@ -45,7 +46,9 @@ def _run_lume(
         capture_output=capture_output,
     )
     if result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or "lume command failed"
+        message = (
+            result.stderr.strip() or result.stdout.strip() or "lume command failed"
+        )
         raise LumeError(message)
     return result
 
@@ -56,13 +59,16 @@ def get_vm_info(name: str, *, debug: bool = False) -> VmInfo | None:
         records = _parse_lume_json(result.stdout)
     except json.JSONDecodeError as error:
         raw_output = result.stdout.strip() or "<empty stdout>"
-        raise LumeError(f"Invalid JSON from `lume ls --format json`: {raw_output}") from error
+        raise LumeError(
+            f"Invalid JSON from `lume ls --format json`: {raw_output}"
+        ) from error
     for record in records:
         if record.get("name") == name:
             return VmInfo(
                 name=name,
                 status=record.get("status", "unknown"),
                 ip_address=record.get("ipAddress"),
+                vnc_url=record.get("vncUrl"),
             )
     return None
 
@@ -83,7 +89,9 @@ def wait_for_status(
         if info.status == expected_status:
             return info
         if time.monotonic() >= deadline:
-            raise LumeError(f"Timed out waiting for VM to reach status {expected_status}: {name}")
+            raise LumeError(
+                f"Timed out waiting for VM to reach status {expected_status}: {name}"
+            )
         time.sleep(interval)
 
 
@@ -105,7 +113,9 @@ def wait_for_running_vm(
             return info
         if pid is not None and not _process_exists(pid):
             log_tail = _read_log_tail(log_path)
-            raise LumeError(log_tail or f"lume run exited before VM became ready: {name}")
+            raise LumeError(
+                log_tail or f"lume run exited before VM became ready: {name}"
+            )
         if time.monotonic() >= deadline:
             raise LumeError(f"Timed out waiting for VM to start: {name}")
         time.sleep(interval)
@@ -167,7 +177,11 @@ def _process_exists(pid: int) -> bool:
 def _read_log_tail(log_path: Path | None) -> str:
     if log_path is None or not log_path.exists():
         return ""
-    lines = [line.strip() for line in log_path.read_text(errors="replace").splitlines() if line.strip()]
+    lines = [
+        line.strip()
+        for line in log_path.read_text(errors="replace").splitlines()
+        if line.strip()
+    ]
     if not lines:
         return ""
     return lines[-1]
@@ -235,7 +249,10 @@ def _list_processes(*, debug: bool) -> list[_ProcessInfo]:
             continue
         processes.append(_ProcessInfo(pid=pid, pgid=pgid, command=parts[2]))
     if debug:
-        _debug_log(debug, f"found {len(processes)} local processes while scanning for stuck VMs")
+        _debug_log(
+            debug,
+            f"found {len(processes)} local processes while scanning for stuck VMs",
+        )
     return processes
 
 
