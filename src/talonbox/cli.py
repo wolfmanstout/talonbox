@@ -497,6 +497,21 @@ def _bootstrap_talon(ip_address: str, debug: bool) -> None:
     )
 
 
+def _logout_guest_session(ip_address: str, *, debug: bool) -> None:
+    run_remote_shell(
+        ip_address,
+        "launchctl bootout gui/$(id -u)",
+        debug=debug,
+        timeout=15.0,
+    )
+    run_remote_shell(
+        ip_address,
+        "while pgrep -x Talon >/dev/null; do sleep 1; done",
+        debug=debug,
+        timeout=15.0,
+    )
+
+
 def _terminal_launch_command() -> str:
     script_path = "/tmp/talonbox-launch.command"
     script_body = (
@@ -635,7 +650,10 @@ def restart_talon(ctx: Context) -> None:
 
 @cli.command(
     short_help="Stop the VM if it is running.",
-    help="Stop the VM and clear talonbox local state. Safe to run repeatedly.",
+    help=(
+        "Log out the guest GUI session when possible, then stop the VM and clear "
+        "talonbox local state. Safe to run repeatedly."
+    ),
     examples=(
         "  talonbox stop",
         "  talonbox --vm talon-test stop",
@@ -646,6 +664,11 @@ def stop(ctx: Context) -> None:
     info = _require_vm(ctx)
     if info.status != "stopped":
         state = load_state(ctx.vm)
+        if info.status == "running" and info.ip_address:
+            try:
+                _logout_guest_session(_require_vm_ip(info, ctx.vm), debug=ctx.debug)
+            except (RemoteCommandError, TransportError) as error:
+                ctx.debug_log(f"guest logout failed: {error}")
         try:
             lume.stop_vm(ctx.vm, debug=ctx.debug)
             lume.wait_for_status(ctx.vm, "stopped", timeout=60.0, debug=ctx.debug)

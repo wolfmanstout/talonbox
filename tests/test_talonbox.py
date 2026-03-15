@@ -316,6 +316,87 @@ def test_stop_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not state_paths("talon-test").state_path.exists()
 
 
+def test_stop_logs_out_guest_session_before_stopping_vm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        cli_module.lume,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_logout_guest_session",
+        lambda ip_address, *, debug: calls.append(("logout", ip_address)),
+    )
+    monkeypatch.setattr(
+        cli_module.lume,
+        "stop_vm",
+        lambda vm, debug=False: calls.append(("stop_vm", vm)),
+    )
+    monkeypatch.setattr(
+        cli_module.lume,
+        "wait_for_status",
+        lambda vm, status, timeout, debug=False: calls.append(
+            ("wait_for_status", timeout)
+        )
+        or VmInfo(vm, "stopped", None),
+    )
+
+    result = runner.invoke(cli, ["stop"])
+
+    assert result.exit_code == 0
+    assert result.output == ""
+    assert calls == [
+        ("logout", "192.168.64.10"),
+        ("stop_vm", "talon-test"),
+        ("wait_for_status", 60.0),
+    ]
+
+
+def test_stop_continues_when_guest_logout_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        cli_module.lume,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
+    )
+
+    def fail_logout(ip_address: str, *, debug: bool) -> None:
+        raise cli_module.RemoteCommandError("logout failed")
+
+    monkeypatch.setattr(cli_module, "_logout_guest_session", fail_logout)
+    monkeypatch.setattr(
+        cli_module.lume,
+        "stop_vm",
+        lambda vm, debug=False: calls.append(("stop_vm", vm)),
+    )
+    monkeypatch.setattr(
+        cli_module.lume,
+        "wait_for_status",
+        lambda vm, status, timeout, debug=False: calls.append(
+            ("wait_for_status", timeout)
+        )
+        or VmInfo(vm, "stopped", None),
+    )
+
+    result = runner.invoke(cli, ["--debug", "stop"])
+
+    assert result.exit_code == 0
+    assert "guest logout failed: logout failed" in result.output
+    assert calls == [
+        ("stop_vm", "talon-test"),
+        ("wait_for_status", 60.0),
+    ]
+
+
 def test_stop_falls_back_to_force_stop_for_stuck_vm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
