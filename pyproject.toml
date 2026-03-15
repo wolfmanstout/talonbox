@@ -1,7 +1,7 @@
 [project]
 name = "talonbox"
 version = "0.1.0"
-description = "Control Talon in a macOS VM."
+description = "A local sandbox for testing Talon scripts. Inspired by playwright-cli."
 readme = "README.md"
 authors = [{name = "James Stout"}]
 requires-python = ">=3.11"

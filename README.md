@@ -5,20 +5,28 @@
 [![Tests](https://github.com/wolfmanstout/talonbox/actions/workflows/test.yml/badge.svg)](https://github.com/wolfmanstout/talonbox/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/wolfmanstout/talonbox/blob/master/LICENSE)
 
-Control Talon in a macOS VM.
+A local sandbox for testing Talon scripts. Inspired by playwright-cli.
+
+`talonbox` is an independent, community-driven sandbox for [Talon Voice](https://talonvoice.com/) development. It gives humans and coding agents a safer place to stage Talon changes inside a local Lume VM before touching the host machine.
 
 ## Installation
 
-Install this tool using `pip` or `pipx`:
+Install with `uv`:
+
+```bash
+uv tool install talonbox
+```
+
+You can also install it with `pip` or `pipx`:
 
 ```bash
 pip install talonbox
+pipx install talonbox
 ```
 
 ## Usage
 
-`talonbox` is a small set of primitives for coding agents that need to stage Talon
-changes inside a local Lume VM before touching the host machine.
+`talonbox` provides a small set of primitives for testing Talon scripts in a VM-backed sandbox.
 
 For top-level help, run:
 
@@ -49,6 +57,15 @@ You can also run:
 ```bash
 python -m talonbox --help
 ```
+
+## Security Principles
+
+These principles are meant to keep Talon experimentation contained and predictable:
+
+- No writes to host files outside `/tmp`.
+- No symlink escapes through `/tmp`; a symlink placed under `/tmp` should not be able to redirect writes outside the allowed boundary.
+- Prefer explicit guest/host boundaries. Remote paths must be written as `guest:/...` so transfers stay easy to audit.
+- Favor VM-local execution first. Talon code should run in the guest and only copy explicit outputs back to the host.
 
 ## Development
 
