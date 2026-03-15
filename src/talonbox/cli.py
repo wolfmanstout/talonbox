@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 import shlex
 import sys
-import tempfile
 import uuid
 import zlib
 from collections.abc import Sequence
@@ -44,6 +42,7 @@ START_TIMEOUT_SECONDS = 180.0
 SSH_TIMEOUT_SECONDS = 60.0
 TALON_TIMEOUT_SECONDS = 30.0
 TALON_REPL_TIMEOUT_SECONDS = 30.0
+HOST_OUTPUT_ROOT = Path("/tmp")
 HELP_COMMAND_GROUPS = (
     ("VM lifecycle", ("setup", "start", "restart-talon", "stop", "show")),
     ("Guest shell", ("exec", "rsync", "scp")),
@@ -82,7 +81,18 @@ RSYNC_VALUE_OPTIONS = {
     "--suffix",
     "--temp-dir",
 }
-RSYNC_REJECTED_OPTIONS = {"-e", "--rsh", "--rsync-path"}
+RSYNC_REJECTED_OPTIONS = {
+    "-T",
+    "-e",
+    "--backup-dir",
+    "--log-file",
+    "--only-write-batch",
+    "--partial-dir",
+    "--rsync-path",
+    "--rsh",
+    "--temp-dir",
+    "--write-batch",
+}
 SCP_VALUE_OPTIONS = {"-c", "-D", "-i", "-l", "-o", "-P", "-S", "-X"}
 SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
 
@@ -267,6 +277,8 @@ def _classify_transfer_operand(raw: str) -> TransferOperand:
         path = raw[len(GUEST_PREFIX) :]
         if not path:
             _raise_click_error("Guest path must not be empty: guest:/path")
+        if not path.startswith("/"):
+            _raise_click_error(f"Guest path must be absolute: {raw}")
         return TransferOperand(raw=raw, kind="guest", path=path)
     if raw.startswith("rsync://"):
         _raise_click_error(f"Only guest: remote paths are allowed: {raw}")
@@ -303,7 +315,11 @@ def _prepare_transfer_args(
             _raise_click_error("Local-to-local transfers are not allowed; use guest: paths for the VM")
         _raise_click_error("Guest-to-guest transfers are not allowed")
     if destination.kind == "local":
-        _ensure_local_write_allowed(destination.path)
+        destination = TransferOperand(
+            raw=destination.raw,
+            kind=destination.kind,
+            path=str(_normalize_local_output_path(destination.path)),
+        )
 
     rewritten = [
         _rewrite_transfer_operand(info.ip_address, operand)
@@ -318,34 +334,28 @@ def _rewrite_transfer_operand(ip_address: str, operand: TransferOperand) -> str:
     return f"{SSH_USERNAME}@{ip_address}:{operand.path}"
 
 
-def _ensure_local_write_allowed(raw_path: str) -> None:
+def _normalize_local_output_path(raw_path: str | Path) -> Path:
     destination = Path(raw_path).expanduser()
     if not destination.is_absolute():
         destination = Path.cwd() / destination
 
-    probe = destination if destination.exists() and destination.is_dir() else destination.parent
-    resolved_probe = probe.resolve(strict=False)
-    allowed_roots = _local_write_roots()
-    if any(_is_relative_to(resolved_probe, root) for root in allowed_roots):
-        return
+    try:
+        resolved_destination = destination.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        _raise_click_error(f"Unable to resolve local output path {raw_path!s}: {error}")
 
-    allowed_display = ", ".join(str(root) for root in allowed_roots)
+    host_output_root = _host_output_root()
+    if _is_relative_to(resolved_destination, host_output_root):
+        return resolved_destination
+
     _raise_click_error(
-        "Local download destination is outside the writable sandbox. "
-        f"Allowed roots: {allowed_display}"
+        "Local output paths must stay under /tmp. "
+        "Symlinks that escape /tmp are not allowed."
     )
 
 
-def _local_write_roots() -> tuple[Path, ...]:
-    roots = {
-        Path.cwd().resolve(strict=False),
-        Path("/tmp").resolve(strict=False),
-        Path(tempfile.gettempdir()).resolve(strict=False),
-    }
-    tmpdir = os.environ.get("TMPDIR")
-    if tmpdir:
-        roots.add(Path(tmpdir).expanduser().resolve(strict=False))
-    return tuple(sorted(roots))
+def _host_output_root() -> Path:
+    return HOST_OUTPUT_ROOT.resolve(strict=False)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -692,12 +702,12 @@ def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
         "Run rsync between the host and the guest VM.\n\n"
         "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
         "and only `guest:` remote paths are allowed. No other remotes are permitted.\n\n"
-        "Local sources may be read from anywhere, but local download destinations must stay "
-        "inside the writable sandbox."
+        "Local sources may be read from anywhere, but any host-side output must stay under "
+        "`/tmp`. Rsync options that create extra host-side files are rejected."
     ),
     examples=(
         "  talonbox rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
-        "  talonbox rsync -av guest:/Users/lume/Pictures/ ./guest-pictures/",
+        "  talonbox rsync -av guest:/Users/lume/Pictures/ /tmp/guest-pictures/",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
@@ -724,8 +734,8 @@ def rsync(ctx: Context, args: tuple[str, ...]) -> None:
         "Run scp between the host and the guest VM.\n\n"
         "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
         "and only `guest:` remote paths are allowed. No other remotes are permitted.\n\n"
-        "Local sources may be read from anywhere, but local download destinations must stay "
-        "inside the writable sandbox."
+        "Local sources may be read from anywhere, but any host-side output must stay under "
+        "`/tmp`."
     ),
     examples=(
         "  talonbox scp ./settings.talon guest:/Users/lume/.talon/user/settings.talon",
@@ -814,17 +824,18 @@ def mimic(ctx: Context, command: str) -> None:
     short_help="Capture a screenshot in the guest and download it locally.",
     help=(
         "Use Talon's screen capture API inside the guest, save the image to a guest temp file, "
-        "download it to the host path you provide, and remove the guest temp file."
+        "download it to a host path under `/tmp`, and remove the guest temp file."
     ),
     examples=(
         "  talonbox screenshot /tmp/talon.png",
-        "  talonbox --vm talon-test screenshot ./artifacts/guest-screen.png",
+        "  talonbox --vm talon-test screenshot /tmp/guest-screen.png",
     ),
 )
 @click.argument("filepath", metavar="HOST_PATH", type=click.Path(dir_okay=False, path_type=Path))
 @pass_context
 def screenshot(ctx: Context, filepath: Path) -> None:
     info = _require_running_vm(ctx)
+    filepath = _normalize_local_output_path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
     remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}.png"
     try:

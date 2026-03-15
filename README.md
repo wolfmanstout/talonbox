@@ -52,6 +52,10 @@ talonbox scp guest:/tmp/out.png /tmp/out.png
 printf 'print(1 + 1)\n' | talonbox repl
 ```
 
+Host-side outputs from `rsync`, `scp`, and `screenshot` are intentionally restricted to `/tmp`.
+This is a caller-facing safety guarantee: invoking `talonbox` must not let humans or coding agents cause arbitrary host writes outside `/tmp`.
+On macOS, `/tmp` may resolve to `/private/tmp`; that canonical temp root is still allowed, but symlink escapes rooted under it are rejected.
+
 You can also run:
 
 ```bash
@@ -60,10 +64,11 @@ python -m talonbox --help
 
 ## Security Principles
 
-These principles are meant to keep Talon experimentation contained and predictable:
+These principles are meant to keep Talon experimentation contained and predictable, especially when `talonbox` is driven by coding agents:
 
-- No writes to host files outside `/tmp`.
+- No caller-triggered writes to host files outside `/tmp`. A `talonbox` command should not let its caller cause arbitrary host writes beyond that boundary.
 - No symlink escapes through `/tmp`; a symlink placed under `/tmp` should not be able to redirect writes outside the allowed boundary.
+- On macOS, treat `/private/tmp` as the canonical form of the same allowed temp root, not as a separate exception.
 - Prefer explicit guest/host boundaries. Remote paths must be written as `guest:/...` so transfers stay easy to audit.
 - Favor VM-local execution first. Talon code should run in the guest and only copy explicit outputs back to the host.
 

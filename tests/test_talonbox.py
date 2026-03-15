@@ -350,10 +350,10 @@ def test_rsync_download_rewrites_guest_source(monkeypatch: pytest.MonkeyPatch) -
         lambda args, debug=False: calls.append(args) or 0,
     )
 
-    result = runner.invoke(cli, ["rsync", "-av", "guest:/Users/lume/Pictures/", "./guest-pictures/"])
+    result = runner.invoke(cli, ["rsync", "-av", "guest:/Users/lume/Pictures/", "/tmp/guest-pictures/"])
 
     assert result.exit_code == 0
-    assert calls == [["-av", "lume@192.168.64.10:/Users/lume/Pictures/", "./guest-pictures/"]]
+    assert calls == [["-av", "lume@192.168.64.10:/Users/lume/Pictures/", str(Path("/tmp/guest-pictures").resolve(strict=False))]]
 
 
 def test_rsync_allows_upload_from_outside_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -372,26 +372,34 @@ def test_rsync_allows_upload_from_outside_workspace(monkeypatch: pytest.MonkeyPa
     assert calls == [["-av", "/Users/jwstout/projects/wolfmanstout_talon/", "lume@192.168.64.10:/tmp/wolfmanstout_talon/"]]
 
 
-def test_rsync_rejects_download_outside_writable_sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_rsync_rejects_download_outside_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
-    monkeypatch.setattr(cli_module, "_local_write_roots", lambda: (tmp_path / "allowed",))
 
     result = runner.invoke(cli, ["rsync", "-av", "guest:/tmp/out.txt", "/Users/jwstout/Downloads/out.txt"])
 
     assert result.exit_code == 1
-    assert "outside the writable sandbox" in result.output
+    assert "Local output paths must stay under /tmp" in result.output
 
 
-def test_scp_rejects_download_outside_writable_sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_scp_rejects_download_outside_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
-    monkeypatch.setattr(cli_module, "_local_write_roots", lambda: (tmp_path / "allowed",))
 
     result = runner.invoke(cli, ["scp", "guest:/tmp/out.txt", "/Users/jwstout/Desktop/out.txt"])
 
     assert result.exit_code == 1
-    assert "outside the writable sandbox" in result.output
+    assert "Local output paths must stay under /tmp" in result.output
+
+
+def test_rsync_rejects_guest_relative_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["rsync", "-av", "./repo/", "guest:tmp/repo/"])
+
+    assert result.exit_code == 1
+    assert "Guest path must be absolute" in result.output
 
 
 def test_rsync_rejects_local_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -434,6 +442,16 @@ def test_rsync_rejects_transport_override(monkeypatch: pytest.MonkeyPatch) -> No
     assert "Option not allowed for VM-only transfer safety: -e" in result.output
 
 
+def test_rsync_rejects_host_write_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["rsync", "--log-file=/tmp/talonbox-rsync.log", "./repo/", "guest:/tmp/repo/"])
+
+    assert result.exit_code == 1
+    assert "Option not allowed for VM-only transfer safety: --log-file" in result.output
+
+
 def test_scp_upload_rewrites_guest_destination(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
     calls: list[list[str]] = []
@@ -463,7 +481,7 @@ def test_scp_download_rewrites_guest_source(monkeypatch: pytest.MonkeyPatch) -> 
     result = runner.invoke(cli, ["scp", "guest:/tmp/out.png", "/tmp/out.png"])
 
     assert result.exit_code == 0
-    assert calls == [["lume@192.168.64.10:/tmp/out.png", "/tmp/out.png"]]
+    assert calls == [["lume@192.168.64.10:/tmp/out.png", str(Path("/tmp/out.png").resolve(strict=False))]]
 
 
 def test_scp_rejects_transport_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -484,6 +502,38 @@ def test_scp_rejects_guest_to_guest(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.exit_code == 1
     assert "Guest-to-guest transfers are not allowed" in result.output
+
+
+def test_rsync_rejects_symlink_escape_from_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    escape_root = tmp_path.resolve()
+    outside_dir = tmp_path.parent / "outside"
+    outside_dir.mkdir()
+    (escape_root / "link").symlink_to(outside_dir, target_is_directory=True)
+
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(cli_module, "_host_output_root", lambda: escape_root)
+
+    result = runner.invoke(cli, ["rsync", "-av", "guest:/tmp/out.txt", str(escape_root / "link" / "out.txt")])
+
+    assert result.exit_code == 1
+    assert "Symlinks that escape /tmp are not allowed." in result.output
+
+
+def test_scp_rejects_symlink_escape_from_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    escape_root = tmp_path.resolve()
+    outside_dir = tmp_path.parent / "outside-scp"
+    outside_dir.mkdir()
+    (escape_root / "link").symlink_to(outside_dir, target_is_directory=True)
+
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(cli_module, "_host_output_root", lambda: escape_root)
+
+    result = runner.invoke(cli, ["scp", "guest:/tmp/out.txt", str(escape_root / "link" / "out.txt")])
+
+    assert result.exit_code == 1
+    assert "Symlinks that escape /tmp are not allowed." in result.output
 
 
 def test_repl_waits_for_socket_then_runs_piped_script(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -563,6 +613,7 @@ def test_screenshot_uses_talon_capture_and_download(monkeypatch: pytest.MonkeyPa
     target = tmp_path / "shots" / "screen.png"
 
     monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(cli_module, "_host_output_root", lambda: tmp_path.resolve())
     monkeypatch.setattr(cli_module, "wait_for_talon_repl", lambda ip, debug=False, timeout=0: None)
     monkeypatch.setattr(
         cli_module,
@@ -596,6 +647,7 @@ def test_screenshot_fails_for_blank_png(monkeypatch: pytest.MonkeyPatch, tmp_pat
     target = tmp_path / "blank.png"
 
     monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+    monkeypatch.setattr(cli_module, "_host_output_root", lambda: tmp_path.resolve())
     monkeypatch.setattr(cli_module, "wait_for_talon_repl", lambda ip, debug=False, timeout=0: None)
     monkeypatch.setattr(cli_module, "run_remote_repl", lambda ip, payload, debug=False: 0)
     monkeypatch.setattr(
@@ -614,6 +666,17 @@ def test_screenshot_fails_for_blank_png(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert result.exit_code == 1
     assert "Guest screenshot was blank." in result.output
     assert not target.exists()
+
+
+def test_screenshot_rejects_output_outside_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+
+    monkeypatch.setattr(cli_module.lume, "get_vm_info", lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"))
+
+    result = runner.invoke(cli, ["screenshot", "/Users/jwstout/Desktop/guest-screen.png"])
+
+    assert result.exit_code == 1
+    assert "Local output paths must stay under /tmp" in result.output
 
 
 def test_get_vm_info_surfaces_raw_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:

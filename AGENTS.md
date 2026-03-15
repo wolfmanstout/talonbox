@@ -21,7 +21,8 @@ uv tool install . --reinstall
 
 ## Security Principles
 
-- No writes to host files outside `/tmp`.
+- No caller-triggered writes to host files outside `/tmp`. `talonbox` should not let humans or coding agents cause arbitrary host writes beyond that boundary.
 - No symlink escapes through `/tmp`; do not assume a symlink rooted in `/tmp` makes an out-of-bounds host write acceptable.
+- On macOS, treat `/private/tmp` as the canonical form of the same allowed temp root, not as a separate exception.
 - Keep guest and host paths explicit. Use `guest:/...` for guest-side transfer operands.
 - Treat the host machine as the thing being protected. Talon execution belongs in the VM unless there is an explicit reason otherwise.
