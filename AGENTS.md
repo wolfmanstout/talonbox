@@ -14,6 +14,8 @@ Use:
 uv tool install . --reinstall
 ```
 
+After committing changes meant for the installed CLI, run the same command again to refresh the system-wide `talonbox` tool from the current checkout.
+
 ## Run During Development
 
 When working from this repository, run `talonbox` via `uv run` so commands use the code in the checkout:
