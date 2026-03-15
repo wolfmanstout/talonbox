@@ -415,6 +415,11 @@ def test_stop_falls_back_to_force_stop_for_stuck_vm(
         lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
     )
     monkeypatch.setattr(
+        cli_module,
+        "_logout_guest_session",
+        lambda ip_address, *, debug: calls.append(("logout_guest_session", ip_address)),
+    )
+    monkeypatch.setattr(
         cli_module.lume,
         "stop_vm",
         lambda vm, debug=False: calls.append(("stop_vm", vm)),
@@ -442,6 +447,7 @@ def test_stop_falls_back_to_force_stop_for_stuck_vm(
     assert result.exit_code == 0
     assert result.output == ""
     assert calls == [
+        ("logout_guest_session", "192.168.64.10"),
         ("stop_vm", "talon-test"),
         ("wait_for_status", 60.0),
         ("force_stop_vm", 4321),
