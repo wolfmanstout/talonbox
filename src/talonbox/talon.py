@@ -6,9 +6,7 @@ def build_mimic_payload(command: str) -> str:
 
 
 def build_repl_exec_payload(code: str) -> str:
-    if not code.endswith("\n"):
-        code += "\n"
-    return f"exec(compile({code!r}, '<talonbox>', 'exec'))\n"
+    return f"exec({code!r})\n"
 
 
 def build_screenshot_payload(remote_path: str) -> str:

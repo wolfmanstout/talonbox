@@ -8,11 +8,7 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
-
-from .state import StateRecord, state_paths
 
 
 class LumeError(RuntimeError):
@@ -104,7 +100,6 @@ def wait_for_running_vm(
     interval: float = 2.0,
     debug: bool = False,
     pid: int | None = None,
-    log_path: Path | None = None,
 ) -> VmInfo:
     deadline = time.monotonic() + timeout
     while True:
@@ -114,36 +109,21 @@ def wait_for_running_vm(
         if info.status == "running" and info.ip_address:
             return info
         if pid is not None and not _process_exists(pid):
-            log_tail = _read_log_tail(log_path)
-            raise LumeError(
-                log_tail or f"lume run exited before VM became ready: {name}"
-            )
+            raise LumeError(f"lume run exited before VM became ready: {name}")
         if time.monotonic() >= deadline:
             raise LumeError(f"Timed out waiting for VM to start: {name}")
         time.sleep(interval)
 
 
-def spawn_vm(name: str, *, debug: bool = False) -> StateRecord:
-    paths = state_paths(name)
-    paths.state_dir.mkdir(parents=True, exist_ok=True)
-    log_handle = paths.log_path.open("ab")
-    try:
-        cmd = ["lume", "run", name, "--no-display"]
-        if debug:
-            _debug_log(debug, f"+ {' '.join(cmd)} > {paths.log_path}")
-        process = subprocess.Popen(
-            cmd,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    finally:
-        log_handle.close()
-    return StateRecord(
-        vm=name,
-        pid=process.pid,
-        log_path=str(paths.log_path),
-        started_at=datetime.now(UTC).isoformat(),
+def spawn_vm(name: str, *, debug: bool = False) -> subprocess.Popen[bytes]:
+    cmd = ["lume", "run", name, "--no-display"]
+    if debug:
+        _debug_log(debug, f"+ {' '.join(cmd)}")
+    return subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
 
 
@@ -151,8 +131,8 @@ def stop_vm(name: str, *, debug: bool = False) -> None:
     _run_lume(["stop", name], debug=debug)
 
 
-def force_stop_vm(name: str, *, debug: bool = False, pid: int | None = None) -> None:
-    pgids = _collect_vm_process_groups(name, pid=pid, debug=debug)
+def force_stop_vm(name: str, *, debug: bool = False) -> None:
+    pgids = _collect_vm_process_groups(name, debug=debug)
     if not pgids:
         raise LumeError(f"Unable to find local Lume process for VM: {name}")
 
@@ -174,19 +154,6 @@ def _process_exists(pid: int) -> bool:
         return True
     else:
         return True
-
-
-def _read_log_tail(log_path: Path | None) -> str:
-    if log_path is None or not log_path.exists():
-        return ""
-    lines = [
-        line.strip()
-        for line in log_path.read_text(errors="replace").splitlines()
-        if line.strip()
-    ]
-    if not lines:
-        return ""
-    return lines[-1]
 
 
 def _parse_lume_json(output: str) -> list[dict[str, Any]]:
@@ -213,15 +180,8 @@ def _parse_lume_json(output: str) -> list[dict[str, Any]]:
     return records
 
 
-def _collect_vm_process_groups(name: str, *, pid: int | None, debug: bool) -> set[int]:
+def _collect_vm_process_groups(name: str, *, debug: bool) -> set[int]:
     pgids: set[int] = set()
-    if pid is not None:
-        try:
-            pgids.add(os.getpgid(pid))
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            pass
 
     for process in _list_processes(debug=debug):
         if f"lume run {name}" not in process.command:

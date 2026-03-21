@@ -47,37 +47,20 @@ def _format_command(cmd: list[str]) -> str:
     return shlex.join(cmd)
 
 
+def _sshpass_base(program: str) -> list[str]:
+    return ["sshpass", "-p", SSH_PASSWORD, program]
+
+
 def _ssh_base(ip_address: str) -> list[str]:
-    return [
-        "sshpass",
-        "-p",
-        SSH_PASSWORD,
-        "ssh",
-        *SSH_OPTIONS,
-        f"{SSH_USERNAME}@{ip_address}",
-    ]
-
-
-def _rsync_shell() -> str:
-    return shlex.join(
-        [
-            "sshpass",
-            "-p",
-            SSH_PASSWORD,
-            "ssh",
-            *SSH_OPTIONS,
-        ]
-    )
+    return [*_sshpass_base("ssh"), *SSH_OPTIONS, f"{SSH_USERNAME}@{ip_address}"]
 
 
 def _scp_base() -> list[str]:
-    return [
-        "sshpass",
-        "-p",
-        SSH_PASSWORD,
-        "scp",
-        *SSH_OPTIONS,
-    ]
+    return [*_sshpass_base("scp"), *SSH_OPTIONS]
+
+
+def _rsync_shell() -> str:
+    return shlex.join([*_sshpass_base("ssh"), *SSH_OPTIONS])
 
 
 def _remote_shell_command(command: str) -> str:
@@ -88,77 +71,67 @@ def _remote_repl_command() -> str:
     return 'sh -lc "$HOME/.talon/bin/repl"'
 
 
-def run_remote_shell(
-    ip_address: str,
-    command: str,
+def _run_command(
+    cmd: list[str],
     *,
     debug: bool = False,
     timeout: float | None = None,
     poll: bool = False,
+    stream: bool = False,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    if not poll:
-        cmd = [*_ssh_base(ip_address), _remote_shell_command(command)]
-        if debug:
-            _debug_log(debug, f"+ {_format_command(cmd)}")
-        result = subprocess.run(
-            cmd,
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode != 0:
-            message = result.stderr.strip() or result.stdout.strip() or f"Remote command failed: {command}"
-            raise RemoteCommandError(message)
-        return result
+    if debug:
+        _debug_log(debug, f"+ {_format_command(cmd)}")
 
-    deadline = time.monotonic() + (timeout or 0)
-    last_message = ""
+    deadline = time.monotonic() + timeout if poll and timeout is not None else None
     while True:
-        cmd = [*_ssh_base(ip_address), _remote_shell_command(command)]
-        if debug:
-            _debug_log(debug, f"+ {_format_command(cmd)}")
         result = subprocess.run(
             cmd,
             check=False,
             text=True,
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
+            capture_output=not stream,
+            timeout=None if poll else timeout,
+            stdin=None if input_text is not None else subprocess.DEVNULL,
+            input=input_text,
         )
-        if result.returncode == 0:
+        if result.returncode == 0 or not poll:
             return result
-        last_message = result.stderr.strip() or result.stdout.strip() or f"Remote command failed: {command}"
-        if time.monotonic() >= deadline:
-            raise RemoteCommandError(last_message)
+        if deadline is not None and time.monotonic() >= deadline:
+            return result
         time.sleep(2.0)
 
 
-def run_remote_shell_streaming(
-    ip_address: str,
-    command_args: list[str],
-    *,
-    debug: bool = False,
-) -> int:
-    remote_command = shlex.join(command_args)
-    cmd = [*_ssh_base(ip_address), _remote_shell_command(remote_command)]
-    if debug:
-        _debug_log(debug, f"+ {_format_command(cmd)}")
-    result = subprocess.run(cmd, check=False)
-    return result.returncode
+def _remote_failure(
+    result: subprocess.CompletedProcess[str],
+    action: str,
+) -> RemoteCommandError:
+    message = result.stderr.strip() if result.stderr else ""
+    if not message and result.stdout:
+        message = result.stdout.strip()
+    return RemoteCommandError(message or action)
 
 
-def run_remote_command_streaming(
+def run_remote_shell(
     ip_address: str,
-    command: str,
+    command: str | list[str],
     *,
     debug: bool = False,
-) -> int:
-    cmd = [*_ssh_base(ip_address), _remote_shell_command(command)]
-    if debug:
-        _debug_log(debug, f"+ {_format_command(cmd)}")
-    result = subprocess.run(cmd, check=False)
-    return result.returncode
+    timeout: float | None = None,
+    poll: bool = False,
+    stream: bool = False,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    remote_command = command if isinstance(command, str) else shlex.join(command)
+    result = _run_command(
+        [*_ssh_base(ip_address), _remote_shell_command(remote_command)],
+        debug=debug,
+        timeout=timeout,
+        poll=poll,
+        stream=stream,
+    )
+    if check and result.returncode != 0:
+        raise _remote_failure(result, f"Remote command failed: {remote_command}")
+    return result
 
 
 def run_remote_repl(
@@ -167,35 +140,18 @@ def run_remote_repl(
     *,
     debug: bool = False,
     stream_output: bool = False,
-) -> int:
-    cmd = [*_ssh_base(ip_address), _remote_repl_command()]
-    if debug:
-        _debug_log(debug, f"+ {_format_command(cmd)}")
-    result = subprocess.run(
-        cmd,
-        check=False,
-        text=True,
-        input=payload,
-        capture_output=True,
+) -> subprocess.CompletedProcess[str]:
+    result = _run_command(
+        [*_ssh_base(ip_address), _remote_repl_command()],
+        debug=debug,
+        input_text=payload,
     )
     if stream_output or result.returncode != 0:
         if result.stdout:
             sys.stdout.write(result.stdout)
         if result.stderr:
             sys.stderr.write(result.stderr)
-    return result.returncode
-
-
-def run_remote_repl_streaming(
-    ip_address: str,
-    *,
-    debug: bool = False,
-) -> int:
-    cmd = [*_ssh_base(ip_address), _remote_repl_command()]
-    if debug:
-        _debug_log(debug, f"+ {_format_command(cmd)}")
-    result = subprocess.run(cmd, check=False)
-    return result.returncode
+    return result
 
 
 def probe_ssh(
@@ -221,17 +177,22 @@ def wait_for_talon_repl(
 ) -> None:
     run_remote_shell(
         ip_address,
-        (
-            '$HOME/.talon/bin/python -c '
-            '\'import os, socket; '
-            'sock = socket.socket(socket.AF_UNIX); '
-            'sock.connect(os.path.expanduser("~/.talon/.sys/repl.sock")); '
-            "sock.close()'"
-        ),
+        'test -S "$HOME/.talon/.sys/repl.sock"',
         debug=debug,
         timeout=timeout,
         poll=True,
     )
+
+
+def _run_transfer(
+    cmd: list[str],
+    *,
+    debug: bool = False,
+) -> int:
+    if debug:
+        _debug_log(debug, f"+ {_format_command(cmd)}")
+    result = subprocess.run(cmd, check=False)
+    return result.returncode
 
 
 def run_rsync(
@@ -239,16 +200,7 @@ def run_rsync(
     *,
     debug: bool = False,
 ) -> int:
-    cmd = [
-        "rsync",
-        "-e",
-        _rsync_shell(),
-        *args,
-    ]
-    if debug:
-        _debug_log(debug, f"+ {_format_command(cmd)}")
-    result = subprocess.run(cmd, check=False)
-    return result.returncode
+    return _run_transfer(["rsync", "-e", _rsync_shell(), *args], debug=debug)
 
 
 def run_scp(
@@ -256,11 +208,7 @@ def run_scp(
     *,
     debug: bool = False,
 ) -> int:
-    cmd = [*_scp_base(), *args]
-    if debug:
-        _debug_log(debug, f"+ {_format_command(cmd)}")
-    result = subprocess.run(cmd, check=False)
-    return result.returncode
+    return _run_transfer([*_scp_base(), *args], debug=debug)
 
 
 def download_from_guest(
@@ -270,16 +218,14 @@ def download_from_guest(
     *,
     debug: bool = False,
 ) -> None:
-    cmd = [
-        "rsync",
-        "-e",
-        _rsync_shell(),
-        f"{SSH_USERNAME}@{ip_address}:{remote_path}",
-        str(local_path),
-    ]
+    cmd = [*_scp_base(), f"{SSH_USERNAME}@{ip_address}:{remote_path}", str(local_path)]
     if debug:
         _debug_log(debug, f"+ {_format_command(cmd)}")
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
     if result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or "failed to download file from guest"
+        message = (
+            result.stderr.strip()
+            or result.stdout.strip()
+            or "failed to download file from guest"
+        )
         raise TransportError(message)

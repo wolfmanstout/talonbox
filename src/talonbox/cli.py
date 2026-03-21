@@ -3,42 +3,36 @@ from __future__ import annotations
 import shlex
 import sys
 import uuid
-import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 import click
 
 from . import lume
-from .state import StateRecord, clear_state, load_state, save_state
 from .talon import (
     build_mimic_payload,
     build_repl_exec_payload,
     build_screenshot_payload,
 )
 from .transport import (
+    SSH_PASSWORD,
+    SSH_USERNAME,
     RemoteCommandError,
     TransportError,
     download_from_guest,
     probe_ssh,
-    run_remote_command_streaming,
     run_remote_repl,
     run_remote_shell,
-    run_remote_shell_streaming,
     run_rsync,
     run_scp,
     wait_for_talon_repl,
 )
 
-SSH_USERNAME = "lume"
-SSH_PASSWORD = "lume"
 DEFAULT_VM = "talon-test"
 TALON_BINARY = "/Applications/Talon.app/Contents/MacOS/Talon"
 TALON_LOG = "$HOME/.talon/talon.log"
-TALON_REPL = "$HOME/.talon/bin/repl"
-TALON_USER_DIR = "$HOME/.talon/user"
 START_TIMEOUT_SECONDS = 180.0
 SSH_TIMEOUT_SECONDS = 60.0
 TALON_TIMEOUT_SECONDS = 30.0
@@ -98,45 +92,12 @@ SCP_VALUE_OPTIONS = {"-c", "-D", "-i", "-l", "-o", "-P", "-S", "-X"}
 SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
 
 
-class TalonboxCommand(click.Command):
-    def __init__(
-        self, *args: Any, examples: Sequence[str] | None = None, **kwargs: Any
-    ) -> None:
-        self.examples = list(examples or [])
-        super().__init__(*args, **kwargs)
-
-    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        self.format_usage(ctx, formatter)
-        self.format_help_text(ctx, formatter)
-        self.format_options(ctx, formatter)
-        self.format_epilog(ctx, formatter)
-        self._format_examples(formatter)
-
-    def _format_examples(self, formatter: click.HelpFormatter) -> None:
-        if not self.examples:
-            return
-        with formatter.section("Examples"):
-            formatter.write_paragraph()
-            for example in self.examples:
-                formatter.write_text(example)
+def _examples_epilog(*examples: str) -> str:
+    body = "\n".join(f"  {example}" for example in examples)
+    return f"\b\nExamples:\n{body}"
 
 
 class TalonboxGroup(click.Group):
-    command_class = TalonboxCommand
-
-    def __init__(
-        self, *args: Any, examples: Sequence[str] | None = None, **kwargs: Any
-    ) -> None:
-        self.examples = list(examples or [])
-        super().__init__(*args, **kwargs)
-
-    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        self.format_usage(ctx, formatter)
-        self.format_help_text(ctx, formatter)
-        self.format_options(ctx, formatter)
-        self.format_epilog(ctx, formatter)
-        self._format_examples(formatter)
-
     def format_commands(
         self, ctx: click.Context, formatter: click.HelpFormatter
     ) -> None:
@@ -165,14 +126,6 @@ class TalonboxGroup(click.Group):
             with formatter.section("Other"):
                 formatter.write_dl(remaining_rows)
 
-    def _format_examples(self, formatter: click.HelpFormatter) -> None:
-        if not self.examples:
-            return
-        with formatter.section("Examples"):
-            formatter.write_paragraph()
-            for example in self.examples:
-                formatter.write_text(example)
-
 
 @dataclass(slots=True)
 class Context:
@@ -198,11 +151,7 @@ def _raise_click_error(message: str) -> NoReturn:
     raise click.ClickException(message)
 
 
-def _handle_transport_error(error: Exception) -> NoReturn:
-    _raise_click_error(str(error))
-
-
-def _require_vm(ctx: Context) -> lume.VmInfo:
+def _get_vm(ctx: Context) -> lume.VmInfo:
     try:
         info = lume.get_vm_info(ctx.vm, debug=ctx.debug)
     except lume.LumeError as error:
@@ -212,16 +161,10 @@ def _require_vm(ctx: Context) -> lume.VmInfo:
     return info
 
 
-def _require_running_vm(ctx: Context) -> lume.VmInfo:
-    info = _require_vm(ctx)
+def _get_running_vm_ip(ctx: Context) -> str:
+    info = _get_vm(ctx)
     if info.status != "running" or not info.ip_address:
         _raise_click_error(f"VM is not running: {ctx.vm}")
-    return info
-
-
-def _require_vm_ip(info: lume.VmInfo, vm: str) -> str:
-    if not info.ip_address:
-        _raise_click_error(f"VM is not running: {vm}")
     return info.ip_address
 
 
@@ -259,7 +202,7 @@ def _split_transfer_args(
             continue
 
         if arg.startswith("--"):
-            option, has_value, attached_value = arg.partition("=")
+            option, has_value, _ = arg.partition("=")
             if option in rejected_options:
                 _raise_click_error(
                     f"Option not allowed for VM-only transfer safety: {option}"
@@ -321,7 +264,7 @@ def _prepare_transfer_args(
     if len(positionals) < 2:
         _raise_click_error("Transfer requires at least one source and one destination")
 
-    info = _require_running_vm(ctx)
+    ip_address = _get_running_vm_ip(ctx)
     sources = [_classify_transfer_operand(arg) for arg in positionals[:-1]]
     destination = _classify_transfer_operand(positionals[-1])
 
@@ -342,7 +285,6 @@ def _prepare_transfer_args(
             path=str(_normalize_local_output_path(destination.path)),
         )
 
-    ip_address = _require_vm_ip(info, ctx.vm)
     rewritten = [
         _rewrite_transfer_operand(ip_address, operand)
         for operand in [*sources, destination]
@@ -388,62 +330,6 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
-def _is_blank_png(filepath: Path) -> bool:
-    data = filepath.read_bytes()
-    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return False
-
-    offset = 8
-    width = height = color_type = None
-    idat_chunks: list[bytes] = []
-    while offset + 8 <= len(data):
-        chunk_length = int.from_bytes(data[offset : offset + 4], "big")
-        chunk_type = data[offset + 4 : offset + 8]
-        chunk_data_start = offset + 8
-        chunk_data_end = chunk_data_start + chunk_length
-        if chunk_data_end + 4 > len(data):
-            return False
-        chunk_data = data[chunk_data_start:chunk_data_end]
-        if chunk_type == b"IHDR":
-            width = int.from_bytes(chunk_data[0:4], "big")
-            height = int.from_bytes(chunk_data[4:8], "big")
-            color_type = chunk_data[9]
-        elif chunk_type == b"IDAT":
-            idat_chunks.append(chunk_data)
-        elif chunk_type == b"IEND":
-            break
-        offset = chunk_data_end + 4
-
-    if width is None or height is None or color_type not in {2, 6} or not idat_chunks:
-        return False
-
-    try:
-        decoded = zlib.decompress(b"".join(idat_chunks))
-    except zlib.error:
-        return False
-
-    bytes_per_pixel = 3 if color_type == 2 else 4
-    stride = width * bytes_per_pixel
-    expected_length = height * (1 + stride)
-    if len(decoded) < expected_length:
-        return False
-
-    first_pixel: bytes | None = None
-    for row_index in range(height):
-        row_start = row_index * (1 + stride)
-        if decoded[row_start] != 0:
-            return False
-        row = decoded[row_start + 1 : row_start + 1 + stride]
-        for pixel_start in range(0, len(row), bytes_per_pixel):
-            pixel = row[pixel_start : pixel_start + bytes_per_pixel]
-            if first_pixel is None:
-                first_pixel = pixel
-                continue
-            if pixel != first_pixel:
-                return False
-    return first_pixel is not None
-
-
 def _restart_talon(
     ip_address: str,
     *,
@@ -471,7 +357,7 @@ def _restart_talon(
         )
     run_remote_shell(
         ip_address,
-        _terminal_launch_command(),
+        _build_talon_terminal_launch_command(),
         debug=debug,
     )
     run_remote_shell(
@@ -485,15 +371,6 @@ def _restart_talon(
         ip_address,
         debug=debug,
         timeout=TALON_REPL_TIMEOUT_SECONDS,
-    )
-
-
-def _bootstrap_talon(ip_address: str, debug: bool) -> None:
-    _restart_talon(
-        ip_address,
-        debug=debug,
-        wipe_user_dir=True,
-        clean_logs=True,
     )
 
 
@@ -512,7 +389,7 @@ def _logout_guest_session(ip_address: str, *, debug: bool) -> None:
     )
 
 
-def _terminal_launch_command() -> str:
+def _build_talon_terminal_launch_command() -> str:
     script_path = "/tmp/talonbox-launch.command"
     script_body = (
         f"#!/bin/sh\nexec arch -x86_64 {TALON_BINARY} >/tmp/talonbox-talon.log 2>&1\n"
@@ -524,14 +401,13 @@ def _terminal_launch_command() -> str:
     )
 
 
-def _cleanup_failed_start(ctx: Context, state: StateRecord) -> None:
-    ctx.debug_log("start failed; stopping VM and clearing local state")
+def _cleanup_failed_start(ctx: Context) -> None:
+    ctx.debug_log("start failed; stopping VM")
     try:
         lume.stop_vm(ctx.vm, debug=ctx.debug)
         lume.wait_for_status(ctx.vm, "stopped", timeout=30.0, debug=ctx.debug)
     except lume.LumeError as error:
         ctx.debug_log(f"cleanup stop failed: {error}")
-    clear_state(ctx.vm)
 
 
 @click.group(
@@ -545,14 +421,14 @@ def _cleanup_failed_start(ctx: Context, state: StateRecord) -> None:
         "Talon-native operations. Use `show` for a read-only status check; it does not modify "
         "the VM."
     ),
-    examples=(
-        "  talonbox start",
-        "  talonbox restart-talon",
-        "  talonbox exec -- uname -a",
-        "  talonbox rsync -av ~/.talon/user/ guest:/Users/lume/.talon/user/",
-        "  talonbox scp guest:/tmp/out.png /tmp/out.png",
-        "  talonbox mimic 'focus chrome'",
-        "  talonbox screenshot /tmp/talon.png",
+    epilog=_examples_epilog(
+        "talonbox start",
+        "talonbox restart-talon",
+        "talonbox exec -- uname -a",
+        "talonbox rsync -av ~/.talon/user/ guest:/Users/lume/.talon/user/",
+        "talonbox scp guest:/tmp/out.png /tmp/out.png",
+        "talonbox mimic 'focus chrome'",
+        "talonbox screenshot /tmp/talon.png",
     ),
 )
 @click.option("--vm", default=DEFAULT_VM, show_default=True, help="Target VM name.")
@@ -571,7 +447,7 @@ def cli(click_ctx: click.Context, vm: str, debug: bool) -> None:
 @cli.command(
     short_help="Create or provision the test VM (stub for now).",
     help="Create or provision the Talon test VM.\n\nThis command is reserved for future setup automation.",
-    examples=("  talonbox setup",),
+    epilog=_examples_epilog("talonbox setup"),
 )
 def setup() -> None:
     _raise_click_error("setup is not implemented yet")
@@ -586,87 +462,87 @@ def setup() -> None:
         "the process that captures screenshots.\n\n"
         "The command fails if the VM is already running."
     ),
-    examples=(
-        "  talonbox start",
-        "  talonbox --vm talon-test --debug start",
+    epilog=_examples_epilog(
+        "talonbox start",
+        "talonbox --vm talon-test --debug start",
     ),
 )
 @pass_context
 def start(ctx: Context) -> None:
-    info = _require_vm(ctx)
+    info = _get_vm(ctx)
     if info.status == "running":
         _raise_click_error(f"VM is already running: {ctx.vm}")
     if info.status != "stopped":
         _raise_click_error(f"VM is not stopped: {ctx.vm} ({info.status})")
 
-    state: StateRecord | None = None
+    process = None
     try:
-        state = lume.spawn_vm(ctx.vm, debug=ctx.debug)
-        save_state(state)
+        process = lume.spawn_vm(ctx.vm, debug=ctx.debug)
         ready_vm = lume.wait_for_running_vm(
             ctx.vm,
             timeout=START_TIMEOUT_SECONDS,
             debug=ctx.debug,
-            pid=state.pid,
-            log_path=Path(state.log_path),
+            pid=process.pid,
         )
-        ready_ip = _require_vm_ip(ready_vm, ctx.vm)
+        ready_ip = ready_vm.ip_address
+        assert ready_ip is not None
         probe_ssh(ready_ip, debug=ctx.debug, timeout=SSH_TIMEOUT_SECONDS)
-        _bootstrap_talon(ready_ip, debug=ctx.debug)
+        _restart_talon(
+            ready_ip,
+            debug=ctx.debug,
+            wipe_user_dir=True,
+            clean_logs=True,
+        )
     except (lume.LumeError, RemoteCommandError, TransportError) as error:
-        if state is not None:
-            _cleanup_failed_start(ctx, state)
-        _handle_transport_error(error)
+        if process is not None:
+            _cleanup_failed_start(ctx)
+        _raise_click_error(str(error))
 
     _print_vm_info(ready_vm)
 
 
 @cli.command(
-    name="restart-talon",
     short_help="Restart Talon inside the running VM and reset Talon logs.",
     help=(
         "Restart Talon inside the running VM without rebooting the VM.\n\n"
         "This truncates `~/.talon/talon.log` and `/tmp/talonbox-talon.log`, then relaunches "
         "Talon under Rosetta through Terminal so screen capture permissions still apply."
     ),
-    examples=(
-        "  talonbox restart-talon",
-        "  talonbox --debug restart-talon",
+    epilog=_examples_epilog(
+        "talonbox restart-talon",
+        "talonbox --debug restart-talon",
     ),
 )
 @pass_context
 def restart_talon(ctx: Context) -> None:
-    info = _require_running_vm(ctx)
     try:
         _restart_talon(
-            _require_vm_ip(info, ctx.vm),
+            _get_running_vm_ip(ctx),
             debug=ctx.debug,
             wipe_user_dir=False,
             clean_logs=True,
         )
     except (RemoteCommandError, TransportError) as error:
-        _handle_transport_error(error)
+        _raise_click_error(str(error))
 
 
 @cli.command(
     short_help="Stop the VM if it is running.",
     help=(
-        "Log out the guest GUI session when possible, then stop the VM and clear "
-        "talonbox local state. Safe to run repeatedly."
+        "Log out the guest GUI session when possible, then stop the VM. Safe to run repeatedly."
     ),
-    examples=(
-        "  talonbox stop",
-        "  talonbox --vm talon-test stop",
+    epilog=_examples_epilog(
+        "talonbox stop",
+        "talonbox --vm talon-test stop",
     ),
 )
 @pass_context
 def stop(ctx: Context) -> None:
-    info = _require_vm(ctx)
+    info = _get_vm(ctx)
     if info.status != "stopped":
-        state = load_state(ctx.vm)
         if info.status == "running" and info.ip_address:
             try:
-                _logout_guest_session(_require_vm_ip(info, ctx.vm), debug=ctx.debug)
+                _logout_guest_session(info.ip_address, debug=ctx.debug)
             except (RemoteCommandError, TransportError) as error:
                 ctx.debug_log(f"guest logout failed: {error}")
         try:
@@ -675,15 +551,10 @@ def stop(ctx: Context) -> None:
         except lume.LumeError as error:
             ctx.debug_log(f"graceful stop failed: {error}")
             try:
-                lume.force_stop_vm(
-                    ctx.vm,
-                    debug=ctx.debug,
-                    pid=state.pid if state is not None else None,
-                )
+                lume.force_stop_vm(ctx.vm, debug=ctx.debug)
                 lume.wait_for_status(ctx.vm, "stopped", timeout=20.0, debug=ctx.debug)
             except lume.LumeError as force_error:
                 _raise_click_error(str(force_error))
-    clear_state(ctx.vm)
 
 
 @cli.command(
@@ -694,19 +565,18 @@ def stop(ctx: Context) -> None:
         "This command is read-only: it does not start, stop, or modify the VM, and is safe to "
         "use in sandboxed environments that permit running `lume ls`."
     ),
-    examples=(
-        "  talonbox show",
-        "  talonbox --vm talon-test show",
+    epilog=_examples_epilog(
+        "talonbox show",
+        "talonbox --vm talon-test show",
     ),
 )
 @pass_context
 def show(ctx: Context) -> None:
-    info = _require_vm(ctx)
+    info = _get_vm(ctx)
     _print_vm_info(info)
 
 
 @cli.command(
-    name="exec",
     context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
     short_help="Run a command on the guest via SSH.",
     help=(
@@ -714,10 +584,10 @@ def show(ctx: Context) -> None:
         "Place `--` before the remote command so talonbox stops parsing options.\n\n"
         "For shell pipelines or redirects, pass a single quoted shell string."
     ),
-    examples=(
-        "  talonbox exec -- whoami",
-        "  talonbox exec -- sh -lc 'ls -la ~/.talon'",
-        '  talonbox exec -- "ps aux | grep Safari"',
+    epilog=_examples_epilog(
+        "talonbox exec -- whoami",
+        "talonbox exec -- sh -lc 'ls -la ~/.talon'",
+        'talonbox exec -- "ps aux | grep Safari"',
     ),
 )
 @click.argument("command", nargs=-1, type=click.UNPROCESSED, metavar="COMMAND...")
@@ -725,22 +595,15 @@ def show(ctx: Context) -> None:
 def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
     if not command:
         _raise_click_error("No command provided")
-    info = _require_running_vm(ctx)
-    ip_address = _require_vm_ip(info, ctx.vm)
-    if len(command) == 1:
-        returncode = run_remote_command_streaming(
-            ip_address,
-            command[0],
-            debug=ctx.debug,
-        )
-    else:
-        returncode = run_remote_shell_streaming(
-            ip_address,
-            list(command),
-            debug=ctx.debug,
-        )
-    if returncode:
-        raise click.exceptions.Exit(returncode)
+    result = run_remote_shell(
+        _get_running_vm_ip(ctx),
+        command[0] if len(command) == 1 else list(command),
+        debug=ctx.debug,
+        stream=True,
+        check=False,
+    )
+    if result.returncode:
+        raise click.exceptions.Exit(result.returncode)
 
 
 @cli.command(
@@ -753,9 +616,9 @@ def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
         "Local sources may be read from anywhere, but any host-side output must stay under "
         "`/tmp`. Rsync options that create extra host-side files are rejected."
     ),
-    examples=(
-        "  talonbox rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
-        "  talonbox rsync -av guest:/Users/lume/Pictures/ /tmp/guest-pictures/",
+    epilog=_examples_epilog(
+        "talonbox rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
+        "talonbox rsync -av guest:/Users/lume/Pictures/ /tmp/guest-pictures/",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
@@ -785,9 +648,9 @@ def rsync(ctx: Context, args: tuple[str, ...]) -> None:
         "Local sources may be read from anywhere, but any host-side output must stay under "
         "`/tmp`."
     ),
-    examples=(
-        "  talonbox scp ./settings.talon guest:/Users/lume/.talon/user/settings.talon",
-        "  talonbox scp guest:/tmp/out.png /tmp/out.png",
+    epilog=_examples_epilog(
+        "talonbox scp ./settings.talon guest:/Users/lume/.talon/user/settings.talon",
+        "talonbox scp guest:/tmp/out.png /tmp/out.png",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="SCP_ARGS...")
@@ -814,16 +677,15 @@ def scp(ctx: Context, args: tuple[str, ...]) -> None:
         "Provide CODE as an argument or pipe Python on stdin. This command is intentionally "
         "non-interactive."
     ),
-    examples=(
-        "  talonbox repl 'print(1+1)'",
-        "  printf 'print(1+1)\\n' | talonbox repl",
+    epilog=_examples_epilog(
+        "talonbox repl 'print(1+1)'",
+        "printf 'print(1+1)\\n' | talonbox repl",
     ),
 )
 @click.argument("code", required=False, metavar="[CODE]")
 @pass_context
 def repl(ctx: Context, code: str | None) -> None:
-    info = _require_running_vm(ctx)
-    ip_address = _require_vm_ip(info, ctx.vm)
+    ip_address = _get_running_vm_ip(ctx)
     wait_for_talon_repl(
         ip_address,
         debug=ctx.debug,
@@ -834,41 +696,40 @@ def repl(ctx: Context, code: str | None) -> None:
             _raise_click_error("No code provided. Pass CODE or pipe Python into stdin.")
         code = sys.stdin.read()
     assert code is not None
-    returncode = run_remote_repl(
+    result = run_remote_repl(
         ip_address,
         build_repl_exec_payload(code),
         debug=ctx.debug,
         stream_output=True,
     )
-    if returncode:
-        raise click.exceptions.Exit(returncode)
+    if result.returncode:
+        raise click.exceptions.Exit(result.returncode)
 
 
 @cli.command(
     short_help="Run a voice command through Talon's mimic().",
     help="Send one phrase to the guest Talon REPL as `mimic(<phrase>)`.",
-    examples=(
-        "  talonbox mimic 'focus chrome'",
-        "  talonbox mimic 'tab close'",
+    epilog=_examples_epilog(
+        "talonbox mimic 'focus chrome'",
+        "talonbox mimic 'tab close'",
     ),
 )
 @click.argument("command", metavar="PHRASE")
 @pass_context
 def mimic(ctx: Context, command: str) -> None:
-    info = _require_running_vm(ctx)
-    ip_address = _require_vm_ip(info, ctx.vm)
+    ip_address = _get_running_vm_ip(ctx)
     wait_for_talon_repl(
         ip_address,
         debug=ctx.debug,
         timeout=TALON_REPL_TIMEOUT_SECONDS,
     )
-    returncode = run_remote_repl(
+    result = run_remote_repl(
         ip_address,
         build_mimic_payload(command),
         debug=ctx.debug,
     )
-    if returncode:
-        raise click.exceptions.Exit(returncode)
+    if result.returncode:
+        raise click.exceptions.Exit(result.returncode)
 
 
 @cli.command(
@@ -877,9 +738,9 @@ def mimic(ctx: Context, command: str) -> None:
         "Use Talon's screen capture API inside the guest, save the image to a guest temp file, "
         "download it to a host path under `/tmp`, and remove the guest temp file."
     ),
-    examples=(
-        "  talonbox screenshot /tmp/talon.png",
-        "  talonbox --vm talon-test screenshot /tmp/guest-screen.png",
+    epilog=_examples_epilog(
+        "talonbox screenshot /tmp/talon.png",
+        "talonbox --vm talon-test screenshot /tmp/guest-screen.png",
     ),
 )
 @click.argument(
@@ -887,8 +748,7 @@ def mimic(ctx: Context, command: str) -> None:
 )
 @pass_context
 def screenshot(ctx: Context, filepath: Path) -> None:
-    info = _require_running_vm(ctx)
-    ip_address = _require_vm_ip(info, ctx.vm)
+    ip_address = _get_running_vm_ip(ctx)
     filepath = _normalize_local_output_path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
     remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}.png"
@@ -898,27 +758,21 @@ def screenshot(ctx: Context, filepath: Path) -> None:
             debug=ctx.debug,
             timeout=TALON_REPL_TIMEOUT_SECONDS,
         )
-        returncode = run_remote_repl(
+        result = run_remote_repl(
             ip_address,
             build_screenshot_payload(remote_path),
             debug=ctx.debug,
         )
-        if returncode:
-            raise click.exceptions.Exit(returncode)
+        if result.returncode:
+            raise click.exceptions.Exit(result.returncode)
         download_from_guest(
             ip_address,
             remote_path,
             filepath,
             debug=ctx.debug,
         )
-        if _is_blank_png(filepath):
-            filepath.unlink(missing_ok=True)
-            _raise_click_error(
-                "Guest screenshot was blank. The VM display may not be rendering; guest-side "
-                "screen capture currently appears unavailable."
-            )
     except (RemoteCommandError, TransportError) as error:
-        _handle_transport_error(error)
+        _raise_click_error(str(error))
     finally:
         try:
             run_remote_shell(
