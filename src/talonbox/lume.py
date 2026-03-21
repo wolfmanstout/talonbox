@@ -5,9 +5,11 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -21,6 +23,12 @@ class VmInfo:
     status: str
     ip_address: str | None
     vnc_url: str | None = None
+
+
+@dataclass(slots=True)
+class VmLaunch:
+    process: subprocess.Popen[bytes]
+    log_path: Path
 
 
 def _debug_log(debug: bool, message: str) -> None:
@@ -99,7 +107,7 @@ def wait_for_running_vm(
     timeout: float,
     interval: float = 2.0,
     debug: bool = False,
-    pid: int | None = None,
+    launch: VmLaunch | None = None,
 ) -> VmInfo:
     deadline = time.monotonic() + timeout
     while True:
@@ -108,23 +116,46 @@ def wait_for_running_vm(
             raise LumeError(f"VM not found: {name}")
         if info.status == "running" and info.ip_address:
             return info
-        if pid is not None and not _process_exists(pid):
-            raise LumeError(f"lume run exited before VM became ready: {name}")
+        if launch is not None:
+            returncode = launch.process.poll()
+            if returncode is not None:
+                raise LumeError(
+                    _format_launch_failure(
+                        launch.log_path,
+                        f"lume run exited before VM became ready: {name} (exit code {returncode})",
+                    )
+                )
         if time.monotonic() >= deadline:
-            raise LumeError(f"Timed out waiting for VM to start: {name}")
+            detail = (
+                _format_launch_failure(
+                    launch.log_path,
+                    f"Timed out waiting for VM to start: {name}",
+                )
+                if launch is not None
+                else f"Timed out waiting for VM to start: {name}"
+            )
+            raise LumeError(detail)
         time.sleep(interval)
 
 
-def spawn_vm(name: str, *, debug: bool = False) -> subprocess.Popen[bytes]:
+def spawn_vm(name: str, *, debug: bool = False) -> VmLaunch:
     cmd = ["lume", "run", name, "--no-display"]
     if debug:
         _debug_log(debug, f"+ {' '.join(cmd)}")
-    return subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    with tempfile.NamedTemporaryFile(
+        mode="w+b",
+        delete=False,
+        prefix="talonbox-lume-run-",
+        suffix=".log",
+        dir="/tmp",
+    ) as log_file:
+        process = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        return VmLaunch(process=process, log_path=Path(log_file.name))
 
 
 def stop_vm(name: str, *, debug: bool = False) -> None:
@@ -145,15 +176,30 @@ def force_stop_vm(name: str, *, debug: bool = False) -> None:
         _kill_process_group(pgid, signal.SIGKILL, debug=debug)
 
 
-def _process_exists(pid: int) -> bool:
+def cleanup_launch_log(log_path: Path) -> None:
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    else:
-        return True
+        log_path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _format_launch_failure(log_path: Path, summary: str) -> str:
+    detail = _read_launch_log(log_path)
+    if not detail:
+        return summary
+    return f"{summary}\n{detail}\nstartup log: {log_path}"
+
+
+def _read_launch_log(log_path: Path, *, max_lines: int = 20) -> str:
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return "\n".join(lines[-max_lines:])
 
 
 def _parse_lume_json(output: str) -> list[dict[str, Any]]:

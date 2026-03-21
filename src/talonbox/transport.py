@@ -8,6 +8,8 @@ from pathlib import Path
 
 SSH_USERNAME = "lume"
 SSH_PASSWORD = "lume"
+TRANSIENT_RETRY_DELAY_SECONDS = 1.0
+TRANSIENT_RETRY_ATTEMPTS = 2
 SSH_OPTIONS = [
     "-o",
     "StrictHostKeyChecking=no",
@@ -84,6 +86,7 @@ def _run_command(
         _debug_log(debug, f"+ {_format_command(cmd)}")
 
     deadline = time.monotonic() + timeout if poll and timeout is not None else None
+    attempts = 0
     while True:
         result = subprocess.run(
             cmd,
@@ -95,6 +98,15 @@ def _run_command(
             input=input_text,
         )
         if result.returncode == 0 or not poll:
+            if result.returncode == 0:
+                return result
+            if (
+                _is_transient_transport_failure(result)
+                and attempts < TRANSIENT_RETRY_ATTEMPTS
+            ):
+                attempts += 1
+                time.sleep(TRANSIENT_RETRY_DELAY_SECONDS)
+                continue
             return result
         if deadline is not None and time.monotonic() >= deadline:
             return result
@@ -109,6 +121,28 @@ def _remote_failure(
     if not message and result.stdout:
         message = result.stdout.strip()
     return RemoteCommandError(message or action)
+
+
+def _transport_failure_message(result: subprocess.CompletedProcess[str]) -> str:
+    return result.stderr.strip() or result.stdout.strip() or ""
+
+
+def _is_transient_transport_failure(result: subprocess.CompletedProcess[str]) -> bool:
+    if result.returncode != 255:
+        return False
+    message = _transport_failure_message(result).lower()
+    needles = (
+        "ssh_askpass",
+        "permission denied (publickey,password,keyboard-interactive)",
+        "connection reset by peer",
+        "connection refused",
+        "connection closed by remote host",
+        "operation timed out",
+        "no route to host",
+        "kex_exchange_identification",
+        "broken pipe",
+    )
+    return any(needle in message for needle in needles)
 
 
 def run_remote_shell(
@@ -219,13 +253,9 @@ def download_from_guest(
     debug: bool = False,
 ) -> None:
     cmd = [*_scp_base(), f"{SSH_USERNAME}@{ip_address}:{remote_path}", str(local_path)]
-    if debug:
-        _debug_log(debug, f"+ {_format_command(cmd)}")
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    result = _run_command(cmd, debug=debug)
     if result.returncode != 0:
         message = (
-            result.stderr.strip()
-            or result.stdout.strip()
-            or "failed to download file from guest"
+            _transport_failure_message(result) or "failed to download file from guest"
         )
         raise TransportError(message)

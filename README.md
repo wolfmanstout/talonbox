@@ -44,6 +44,14 @@ talonbox screenshot /tmp/talon.png
 talonbox stop
 ```
 
+For a first-pass diagnostic when the setup seems broken, run:
+
+```bash
+talonbox smoke-test
+```
+
+`smoke-test` is a mutating end-to-end sanity check. It may stop a running VM, pushes a temporary Talon command bundle, runs `mimic`, captures a screenshot, keeps debugging artifacts under `/tmp`, and leaves the VM stopped when it finishes.
+
 General guest access:
 
 ```bash
