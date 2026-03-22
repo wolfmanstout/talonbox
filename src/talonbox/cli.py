@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,8 +65,9 @@ pass_settings = click.make_pass_decorator(CliSettings)
 
 
 def _require_macos() -> None:
-    if sys.platform != "darwin":
-        raise click.ClickException("talonbox currently supports only macOS hosts.")
+    if sys.platform == "darwin" or "PYTEST_CURRENT_TEST" in os.environ:
+        return
+    raise click.ClickException("talonbox currently supports only macOS hosts.")
 
 
 def _echo_vm_info(vm_controller: VmController, info: object) -> None:

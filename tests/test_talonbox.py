@@ -192,6 +192,7 @@ def test_cli_rejects_non_macos_before_running_commands(
     calls: list[str] = []
 
     monkeypatch.setattr(cli_module.sys, "platform", "linux")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setattr(
         cli_module.VmController,
         "get_vm",
