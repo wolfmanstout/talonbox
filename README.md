@@ -63,6 +63,7 @@ printf 'print(1 + 1)\n' | talonbox repl
 Host-side outputs from `rsync`, `scp`, and `screenshot` are intentionally restricted to `/tmp`.
 This is a caller-facing safety guarantee: invoking `talonbox` must not let humans or coding agents cause arbitrary host writes outside `/tmp`.
 On macOS, `/tmp` may resolve to `/private/tmp`; that canonical temp root is still allowed, but symlink escapes rooted under it are rejected.
+For `rsync` and `scp`, talonbox keeps the explicit `guest:/...` transfer rules and runs the underlying transfer process inside the macOS sandbox, so extra host-side writes outside that boundary fail with an obvious permission error instead of relying on a large flag denylist.
 
 You can also run:
 

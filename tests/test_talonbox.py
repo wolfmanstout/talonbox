@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 from talonbox import cli as cli_module
 from talonbox import lume as lume_module
+from talonbox import transfer as transfer_module
 from talonbox import vm as vm_module
 from talonbox.cli import cli
 from talonbox.lume import VmInfo
@@ -182,6 +183,27 @@ def test_smoke_test_command_passes_yes_to_runner(
 
     assert result.exit_code == 0
     assert calls == [True]
+
+
+def test_cli_rejects_non_macos_before_running_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli_module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "get_vm",
+        lambda self: calls.append("get_vm")
+        or VmInfo(self.vm, "running", "192.168.64.10"),
+    )
+
+    result = runner.invoke(cli, ["show"])
+
+    assert result.exit_code == 1
+    assert "supports only macOS hosts" in result.output
+    assert calls == []
 
 
 def test_repl_reads_stdin_when_no_code(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -731,6 +753,20 @@ def test_transfer_service_rejects_transport_override() -> None:
         )
 
 
+def test_transfer_service_allows_rsync_host_write_flag_inside_sandbox() -> None:
+    _, transfer_service, _ = _build_service_stack()
+
+    args = transfer_service.prepare_rsync_args(
+        ["--log-file=/tmp/talonbox-rsync.log", "./repo/", "guest:/tmp/repo/"]
+    )
+
+    assert args == [
+        "--log-file=/tmp/talonbox-rsync.log",
+        "./repo/",
+        "lume@192.168.64.10:/tmp/repo/",
+    ]
+
+
 def test_transfer_service_rejects_guest_to_guest() -> None:
     _, transfer_service, _ = _build_service_stack()
 
@@ -1024,6 +1060,11 @@ def test_transfer_service_rsync_uses_fixed_vm_shell(
 ) -> None:
     recorded: list[list[str]] = []
     _, transfer_service, _ = _build_service_stack()
+    monkeypatch.setattr(
+        transfer_service,
+        "_sandbox_command_prefix",
+        lambda: ["sandbox-exec", "-p", "(profile)"],
+    )
 
     def fake_run(
         cmd: list[str], check: bool = False
@@ -1038,6 +1079,9 @@ def test_transfer_service_rsync_uses_fixed_vm_shell(
     assert returncode == 0
     assert recorded == [
         [
+            "sandbox-exec",
+            "-p",
+            "(profile)",
             "rsync",
             "-e",
             "sshpass -p lume ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=no -o NumberOfPasswordPrompts=1 -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no -o PreferredAuthentications=password -o PubkeyAuthentication=no",
@@ -1053,6 +1097,11 @@ def test_transfer_service_scp_uses_fixed_vm_ssh_options(
 ) -> None:
     recorded: list[list[str]] = []
     _, transfer_service, _ = _build_service_stack()
+    monkeypatch.setattr(
+        transfer_service,
+        "_sandbox_command_prefix",
+        lambda: ["sandbox-exec", "-p", "(profile)"],
+    )
 
     def fake_run(
         cmd: list[str], check: bool = False
@@ -1067,6 +1116,9 @@ def test_transfer_service_scp_uses_fixed_vm_ssh_options(
     assert returncode == 0
     assert recorded == [
         [
+            "sandbox-exec",
+            "-p",
+            "(profile)",
             "sshpass",
             "-p",
             "lume",
@@ -1093,6 +1145,24 @@ def test_transfer_service_scp_uses_fixed_vm_ssh_options(
             "lume@192.168.64.10:/tmp/settings.talon",
         ]
     ]
+
+
+def test_transfer_service_sandbox_profile_allows_tmp_and_dev(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, transfer_service, _ = _build_service_stack()
+
+    monkeypatch.setattr(transfer_module, "HOST_OUTPUT_ROOT", Path("/tmp"))
+    monkeypatch.setattr(
+        transfer_service, "_host_output_root", lambda: Path("/private/tmp")
+    )
+
+    profile = transfer_service._sandbox_profile()
+
+    assert "(deny file-write*)" in profile
+    assert '(allow file-write* (subpath "/private/tmp"))' in profile
+    assert '(allow file-write* (subpath "/tmp"))' in profile
+    assert '(allow file-write* (subpath "/dev"))' in profile
 
 
 def test_running_vm_download_uses_scp(monkeypatch: pytest.MonkeyPatch) -> None:

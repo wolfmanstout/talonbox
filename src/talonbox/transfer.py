@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from .vm import RunningVm
 
 HOST_OUTPUT_ROOT = Path("/tmp")
 GUEST_PREFIX = "guest:"
+DEVICE_ROOT = Path("/dev")
 RSYNC_VALUE_OPTIONS = {
     "-B",
     "-f",
@@ -44,16 +46,9 @@ RSYNC_VALUE_OPTIONS = {
     "--temp-dir",
 }
 RSYNC_REJECTED_OPTIONS = {
-    "-T",
     "-e",
-    "--backup-dir",
-    "--log-file",
-    "--only-write-batch",
-    "--partial-dir",
     "--rsync-path",
     "--rsh",
-    "--temp-dir",
-    "--write-batch",
 }
 SCP_VALUE_OPTIONS = {"-c", "-D", "-i", "-l", "-o", "-P", "-S", "-X"}
 SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
@@ -89,6 +84,7 @@ class TransferService:
     def rsync(self, args: Sequence[str]) -> int:
         return self._run_transfer(
             [
+                *self._sandbox_command_prefix(),
                 "rsync",
                 "-e",
                 self.running_vm.ssh_command_for_rsync(),
@@ -104,6 +100,7 @@ class TransferService:
     def scp(self, args: Sequence[str]) -> int:
         return self._run_transfer(
             [
+                *self._sandbox_command_prefix(),
                 *self.running_vm.scp_command_prefix(),
                 *self._build_transfer_command_args(
                     args,
@@ -266,8 +263,42 @@ class TransferService:
         except ValueError:
             return False
 
+    def _sandbox_command_prefix(self) -> list[str]:
+        sandbox_exec = shutil.which("sandbox-exec")
+        if sandbox_exec is None:
+            raise click.ClickException(
+                "sandbox-exec is required on macOS to enforce talonbox host write boundaries."
+            )
+
+        return [sandbox_exec, "-p", self._sandbox_profile()]
+
+    def _sandbox_profile(self) -> str:
+        host_output_root = self._host_output_root()
+        writable_roots = {host_output_root}
+        if host_output_root != HOST_OUTPUT_ROOT:
+            writable_roots.add(HOST_OUTPUT_ROOT)
+
+        write_rules = [
+            f'(allow file-write* (subpath "{root}"))' for root in sorted(writable_roots)
+        ]
+        write_rules.append(f'(allow file-write* (subpath "{DEVICE_ROOT}"))')
+        return " ".join(
+            [
+                "(version 1)",
+                "(allow default)",
+                "(deny file-write*)",
+                *write_rules,
+            ]
+        )
+
     def _run_transfer(self, cmd: list[str]) -> int:
         if self.running_vm.debug:
             click.echo(f"+ {shlex.join(cmd)}", err=True)
         result = subprocess.run(cmd, check=False)
+        if result.returncode and self._sandbox_command_prefix():
+            click.echo(
+                "HINT transfers run inside a macOS sandbox; extra host-side writes "
+                "outside /tmp fail with 'Operation not permitted'.",
+                err=True,
+            )
         return result.returncode

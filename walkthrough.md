@@ -1399,7 +1399,7 @@ def _is_blank_png(filepath: Path) -> bool:
 
 ### How transfer safety works
 
-**`_split_transfer_args`** manually tokenises the argument list into passthrough flags and positional operands. It rejects any option in `RSYNC_REJECTED_OPTIONS` / `SCP_REJECTED_OPTIONS` (options that could create files on the host outside `/tmp`, like `--log-file`, `--temp-dir`, `--backup-dir`, or the rsync remote-shell override `-e`).
+**`_split_transfer_args`** manually tokenises the argument list into passthrough flags and positional operands. It still rejects transport overrides in `RSYNC_REJECTED_OPTIONS` / `SCP_REJECTED_OPTIONS` (for example rsync's `-e` / `--rsh` or scp config overrides) so the host side always uses talonbox's fixed path into the VM.
 
 **`_classify_transfer_operand`** converts each positional into a `TransferOperand`:
 - `guest:/absolute/path` → kind `"guest"`
@@ -1414,7 +1414,7 @@ def _is_blank_png(filepath: Path) -> bool:
 
 **`_normalize_local_output_path`** resolves the path (following symlinks via `Path.resolve`) and then checks `_is_relative_to(resolved, /tmp)`. Because it resolves symlinks before checking, a symlink that points outside `/tmp` is rejected even though its location is inside `/tmp`.
 
-Finally, guest operands are rewritten from `guest:/path` to `lume@<ip>:/path` for the actual subprocess call.
+Finally, guest operands are rewritten from `guest:/path` to `lume@<ip>:/path` for the actual subprocess call, and the transfer subprocess is launched through macOS seatbelt so any extra host-side writes outside `/tmp` fail with `Operation not permitted`.
 
 ## Screenshot command and blank PNG detection
 
@@ -1661,7 +1661,8 @@ def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
         "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
         "and only `guest:` remote paths are allowed. No other remotes are permitted.\n\n"
         "Local sources may be read from anywhere, but any host-side output must stay under "
-        "`/tmp`. Rsync options that create extra host-side files are rejected."
+        "`/tmp`. Transfers run inside the macOS sandbox, so extra host-side writes outside "
+        "that boundary fail with an obvious permission error."
     ),
     examples=(
         "  talonbox rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
@@ -1833,7 +1834,8 @@ The security model has four layers:
 | Layer | Mechanism |
 |---|---|
 | Path confinement | `_normalize_local_output_path` resolves the full canonical path and calls `_is_relative_to(resolved, /tmp)`. Symlinks are followed before the check, so a symlink inside `/tmp` pointing outside is rejected. |
-| Option filtering | `RSYNC_REJECTED_OPTIONS` and `SCP_REJECTED_OPTIONS` block flags like `-e` (remote-shell override), `--log-file`, `--temp-dir`, `--backup-dir` that could direct writes to arbitrary host paths. |
+| Transport pinning | `RSYNC_REJECTED_OPTIONS` and `SCP_REJECTED_OPTIONS` block transport overrides like `-e`, `--rsh`, `--rsync-path`, `-F`, `-J`, `-o`, and `-S` so callers cannot bypass talonbox's fixed SSH/scp path into the VM. |
+| Host write confinement | The transfer subprocess runs inside macOS seatbelt with writes allowed under `/tmp` (canonicalized to `/private/tmp`) plus `/dev` for SSH/scp pseudo-terminals and null sinks, so extra host-side write flags fail at the OS boundary instead of relying on a long denylist. |
 | Remote path isolation | Only `guest:/` prefixed paths are accepted as remote operands; bare `host:path` notation and `rsync://` URIs are rejected. |
 | No cross-transfer | Local→local and guest→guest transfers are blocked; every transfer must cross the host/guest boundary in exactly one direction. |
 
@@ -1955,7 +1957,7 @@ def test_run_scp_uses_fixed_vm_ssh_options(monkeypatch: pytest.MonkeyPatch) -> N
 
 1. **No subprocess execution** — every `lume`, `transport`, and system call is monkeypatched. Tests verify what arguments would have been passed, not the real side effects.
 2. **Argument capture pattern** — many tests replace a function with one that appends its arguments to a list, then assert on that list after running the CLI via Click's `CliRunner`.
-3. **Security regression tests** — symlink escapes, rejected options, guest-relative paths, non-guest remotes, and local-to-local transfers each have their own dedicated test, making the security invariants part of the test contract.
+3. **Security regression tests** — symlink escapes, transport override rejection, guest-relative paths, non-guest remotes, local-to-local transfers, and the seatbelt wrapper each have dedicated coverage, making the security invariants part of the test contract.
 
 ```bash
 sed -n '1,60p' tests/test_talonbox.py

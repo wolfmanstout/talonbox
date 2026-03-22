@@ -63,6 +63,11 @@ class CliSettings:
 pass_settings = click.make_pass_decorator(CliSettings)
 
 
+def _require_macos() -> None:
+    if sys.platform != "darwin":
+        raise click.ClickException("talonbox currently supports only macOS hosts.")
+
+
 def _echo_vm_info(vm_controller: VmController, info: object) -> None:
     assert hasattr(info, "status")
     for line in vm_controller.format_vm_info(info):  # type: ignore[arg-type]
@@ -113,6 +118,7 @@ def _build_smoke_test_runner(settings: CliSettings) -> SmokeTestRunner:
 @click.version_option(prog_name="talonbox")
 @click.pass_context
 def cli(click_ctx: click.Context, vm: str, debug: bool) -> None:
+    _require_macos()
     click_ctx.obj = CliSettings(vm=vm, debug=debug)
 
 
@@ -266,7 +272,8 @@ def exec_command(settings: CliSettings, command: tuple[str, ...]) -> None:
         "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
         "and only `guest:` remote paths are allowed. No other remotes are permitted.\n\n"
         "Local sources may be read from anywhere, but any host-side output must stay under "
-        "`/tmp`. Rsync options that create extra host-side files are rejected."
+        "`/tmp`. Transfers run inside the macOS sandbox, so extra host-side writes outside "
+        "that boundary fail with an obvious permission error."
     ),
     epilog=_examples_epilog(
         "talonbox rsync -av ./repo/ guest:/Users/lume/.talon/user/repo/",
@@ -290,7 +297,8 @@ def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
         "Use explicit `guest:/path` operands for the VM side. Exactly one side may be remote, "
         "and only `guest:` remote paths are allowed. No other remotes are permitted.\n\n"
         "Local sources may be read from anywhere, but any host-side output must stay under "
-        "`/tmp`."
+        "`/tmp`. Transfers run inside the macOS sandbox, so extra host-side writes outside "
+        "that boundary fail with an obvious permission error."
     ),
     epilog=_examples_epilog(
         "talonbox scp ./settings.talon guest:/Users/lume/.talon/user/settings.talon",
