@@ -1,97 +1,22 @@
 from __future__ import annotations
 
-import shlex
 import sys
-import time
-import uuid
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NoReturn
 
 import click
 
-from . import lume
-from .talon import (
-    build_mimic_payload,
-    build_repl_exec_payload,
-    build_screenshot_payload,
-)
-from .transport import (
-    SSH_PASSWORD,
-    SSH_USERNAME,
-    RemoteCommandError,
-    TransportError,
-    download_from_guest,
-    probe_ssh,
-    run_remote_repl,
-    run_remote_shell,
-    run_rsync,
-    run_scp,
-    wait_for_talon_repl,
-)
+from .smoke_test import SmokeTestRunner
+from .talon_client import TalonClient
+from .transfer import TransferService
+from .vm import VmController
 
 DEFAULT_VM = "talon-test"
-TALON_BINARY = "/Applications/Talon.app/Contents/MacOS/Talon"
-TALON_LOG = "$HOME/.talon/talon.log"
-START_TIMEOUT_SECONDS = 180.0
-SSH_TIMEOUT_SECONDS = 60.0
-TALON_TIMEOUT_SECONDS = 30.0
-TALON_REPL_TIMEOUT_SECONDS = 30.0
-TALON_POST_RESTART_SETTLE_SECONDS = 3.0
-HOST_OUTPUT_ROOT = Path("/tmp")
 HELP_COMMAND_GROUPS = (
     ("VM lifecycle", ("setup", "start", "restart-talon", "smoke-test", "stop", "show")),
     ("Guest shell", ("exec", "rsync", "scp")),
     ("Talon RPC", ("repl", "mimic", "screenshot")),
 )
-
-GUEST_PREFIX = "guest:"
-RSYNC_VALUE_OPTIONS = {
-    "-B",
-    "-f",
-    "-M",
-    "-T",
-    "--backup-dir",
-    "--block-size",
-    "--bwlimit",
-    "--chmod",
-    "--compare-dest",
-    "--compress-choice",
-    "--copy-dest",
-    "--exclude",
-    "--exclude-from",
-    "--files-from",
-    "--filter",
-    "--iconv",
-    "--include",
-    "--include-from",
-    "--link-dest",
-    "--log-file",
-    "--log-file-format",
-    "--max-size",
-    "--min-size",
-    "--out-format",
-    "--partial-dir",
-    "--password-file",
-    "--skip-compress",
-    "--suffix",
-    "--temp-dir",
-}
-RSYNC_REJECTED_OPTIONS = {
-    "-T",
-    "-e",
-    "--backup-dir",
-    "--log-file",
-    "--only-write-batch",
-    "--partial-dir",
-    "--rsync-path",
-    "--rsh",
-    "--temp-dir",
-    "--write-batch",
-}
-SCP_VALUE_OPTIONS = {"-c", "-D", "-i", "-l", "-o", "-P", "-S", "-X"}
-SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
 
 
 def _examples_epilog(*examples: str) -> str:
@@ -130,490 +55,30 @@ class TalonboxGroup(click.Group):
 
 
 @dataclass(slots=True)
-class Context:
+class CliSettings:
     vm: str
     debug: bool
 
-    def debug_log(self, message: str) -> None:
-        if self.debug:
-            click.echo(message, err=True)
 
+pass_settings = click.make_pass_decorator(CliSettings)
 
-pass_context = click.make_pass_decorator(Context)
 
+def _echo_vm_info(vm_controller: VmController, info: object) -> None:
+    assert hasattr(info, "status")
+    for line in vm_controller.format_vm_info(info):  # type: ignore[arg-type]
+        click.echo(line)
 
-@dataclass(frozen=True, slots=True)
-class TransferOperand:
-    raw: str
-    kind: str
-    path: str
 
+def _build_talon_client(settings: CliSettings) -> TalonClient:
+    vm_controller = VmController(settings.vm, settings.debug)
+    running_vm = vm_controller.get_running_vm()
+    transfer_service = TransferService(running_vm)
+    return TalonClient(running_vm, transfer_service)
 
-def _raise_click_error(message: str) -> NoReturn:
-    raise click.ClickException(message)
 
-
-def _get_vm(ctx: Context) -> lume.VmInfo:
-    try:
-        info = lume.get_vm_info(ctx.vm, debug=ctx.debug)
-    except lume.LumeError as error:
-        _raise_click_error(str(error))
-    if info is None:
-        _raise_click_error(f"VM not found: {ctx.vm}")
-    return info
-
-
-def _get_running_vm_ip(ctx: Context) -> str:
-    info = _get_vm(ctx)
-    if info.status != "running" or not info.ip_address:
-        _raise_click_error(f"VM is not running: {ctx.vm}")
-    return info.ip_address
-
-
-def _print_vm_info(info: lume.VmInfo) -> None:
-    click.echo(f"status: {info.status}")
-    if info.status == "running" and info.ip_address:
-        click.echo(f"ip: {info.ip_address}")
-        click.echo(f"username: {SSH_USERNAME}")
-        click.echo(f"password: {SSH_PASSWORD}")
-        if info.vnc_url:
-            click.echo(f"vnc: {info.vnc_url}")
-
-
-def _split_transfer_args(
-    args: Sequence[str],
-    *,
-    value_options: set[str],
-    rejected_options: set[str],
-) -> tuple[list[str], list[str]]:
-    passthrough: list[str] = []
-    positionals: list[str] = []
-    index = 0
-    parsing_options = True
-
-    while index < len(args):
-        arg = args[index]
-        if parsing_options and arg == "--":
-            passthrough.append(arg)
-            parsing_options = False
-            index += 1
-            continue
-        if not parsing_options or not arg.startswith("-") or arg == "-":
-            positionals.append(arg)
-            index += 1
-            continue
-
-        if arg.startswith("--"):
-            option, has_value, _ = arg.partition("=")
-            if option in rejected_options:
-                _raise_click_error(
-                    f"Option not allowed for VM-only transfer safety: {option}"
-                )
-            passthrough.append(arg)
-            index += 1
-            if has_value or option not in value_options:
-                continue
-            if index >= len(args):
-                _raise_click_error(f"Option requires a value: {option}")
-            passthrough.append(args[index])
-            index += 1
-            continue
-
-        short_option = arg[:2]
-        if short_option in rejected_options:
-            _raise_click_error(
-                f"Option not allowed for VM-only transfer safety: {short_option}"
-            )
-        passthrough.append(arg)
-        index += 1
-        if short_option not in value_options or len(arg) > 2:
-            continue
-        if index >= len(args):
-            _raise_click_error(f"Option requires a value: {short_option}")
-        passthrough.append(args[index])
-        index += 1
-
-    return passthrough, positionals
-
-
-def _classify_transfer_operand(raw: str) -> TransferOperand:
-    if raw.startswith(GUEST_PREFIX):
-        path = raw[len(GUEST_PREFIX) :]
-        if not path:
-            _raise_click_error("Guest path must not be empty: guest:/path")
-        if not path.startswith("/"):
-            _raise_click_error(f"Guest path must be absolute: {raw}")
-        return TransferOperand(raw=raw, kind="guest", path=path)
-    if raw.startswith("rsync://"):
-        _raise_click_error(f"Only guest: remote paths are allowed: {raw}")
-    if ":" in raw:
-        _raise_click_error(f"Only guest: remote paths are allowed: {raw}")
-    return TransferOperand(raw=raw, kind="local", path=raw)
-
-
-def _prepare_transfer_args(
-    ctx: Context,
-    args: Sequence[str],
-    *,
-    value_options: set[str],
-    rejected_options: set[str],
-) -> list[str]:
-    passthrough, positionals = _split_transfer_args(
-        args,
-        value_options=value_options,
-        rejected_options=rejected_options,
-    )
-    if len(positionals) < 2:
-        _raise_click_error("Transfer requires at least one source and one destination")
-
-    ip_address = _get_running_vm_ip(ctx)
-    sources = [_classify_transfer_operand(arg) for arg in positionals[:-1]]
-    destination = _classify_transfer_operand(positionals[-1])
-
-    source_kinds = {source.kind for source in sources}
-    if len(source_kinds) != 1:
-        _raise_click_error("Mixed local and guest sources are not allowed")
-    source_kind = next(iter(source_kinds))
-    if source_kind == destination.kind:
-        if source_kind == "local":
-            _raise_click_error(
-                "Local-to-local transfers are not allowed; use guest: paths for the VM"
-            )
-        _raise_click_error("Guest-to-guest transfers are not allowed")
-    if destination.kind == "local":
-        destination = TransferOperand(
-            raw=destination.raw,
-            kind=destination.kind,
-            path=str(_normalize_local_output_path(destination.path)),
-        )
-
-    rewritten = [
-        _rewrite_transfer_operand(ip_address, operand)
-        for operand in [*sources, destination]
-    ]
-    return [*passthrough, *rewritten]
-
-
-def _rewrite_transfer_operand(ip_address: str, operand: TransferOperand) -> str:
-    if operand.kind == "local":
-        return operand.path
-    return f"{SSH_USERNAME}@{ip_address}:{operand.path}"
-
-
-def _normalize_local_output_path(raw_path: str | Path) -> Path:
-    destination = Path(raw_path).expanduser()
-    if not destination.is_absolute():
-        destination = Path.cwd() / destination
-
-    try:
-        resolved_destination = destination.resolve(strict=False)
-    except (OSError, RuntimeError) as error:
-        _raise_click_error(f"Unable to resolve local output path {raw_path!s}: {error}")
-
-    host_output_root = _host_output_root()
-    if _is_relative_to(resolved_destination, host_output_root):
-        return resolved_destination
-
-    _raise_click_error(
-        "Local output paths must stay under /tmp. "
-        "Symlinks that escape /tmp are not allowed."
-    )
-
-
-def _host_output_root() -> Path:
-    return HOST_OUTPUT_ROOT.resolve(strict=False)
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
-def _restart_talon(
-    ip_address: str,
-    *,
-    debug: bool,
-    wipe_user_dir: bool,
-    clean_logs: bool,
-) -> None:
-    run_remote_shell(
-        ip_address,
-        "pkill -x Talon >/dev/null 2>&1 || true",
-        debug=debug,
-    )
-    if clean_logs:
-        run_remote_shell(
-            ip_address,
-            f'mkdir -p "$HOME/.talon" && : > {TALON_LOG} && : > /tmp/talonbox-talon.log',
-            debug=debug,
-        )
-    run_remote_shell(ip_address, 'mkdir -p "$HOME/.talon/user"', debug=debug)
-    if wipe_user_dir:
-        run_remote_shell(
-            ip_address,
-            'find "$HOME/.talon/user" -mindepth 1 -maxdepth 1 -exec rm -rf {} +',
-            debug=debug,
-        )
-    run_remote_shell(
-        ip_address,
-        _build_talon_terminal_launch_command(),
-        debug=debug,
-    )
-    run_remote_shell(
-        ip_address,
-        "pgrep -x Talon >/dev/null",
-        debug=debug,
-        timeout=TALON_TIMEOUT_SECONDS,
-        poll=True,
-    )
-    wait_for_talon_repl(
-        ip_address,
-        debug=debug,
-        timeout=TALON_REPL_TIMEOUT_SECONDS,
-    )
-    time.sleep(TALON_POST_RESTART_SETTLE_SECONDS)
-
-
-def _logout_guest_session(ip_address: str, *, debug: bool) -> None:
-    run_remote_shell(
-        ip_address,
-        (
-            "launchctl bootout gui/$(id -u) >/dev/null 2>&1 || true; "
-            "while pgrep -x Talon >/dev/null 2>&1; do sleep 1; done"
-        ),
-        debug=debug,
-        timeout=15.0,
-    )
-
-
-def _build_talon_terminal_launch_command() -> str:
-    script_path = "/tmp/talonbox-launch.command"
-    script_body = (
-        f"#!/bin/sh\nexec arch -x86_64 {TALON_BINARY} >/tmp/talonbox-talon.log 2>&1\n"
-    )
-    return (
-        f"printf %s {shlex.quote(script_body)} > {shlex.quote(script_path)} && "
-        f"chmod +x {shlex.quote(script_path)} && "
-        f"open -a Terminal {shlex.quote(script_path)}"
-    )
-
-
-def _cleanup_failed_start(ctx: Context) -> None:
-    ctx.debug_log("start failed; stopping VM")
-    try:
-        lume.stop_vm(ctx.vm, debug=ctx.debug)
-        lume.wait_for_status(ctx.vm, "stopped", timeout=30.0, debug=ctx.debug)
-    except lume.LumeError as error:
-        ctx.debug_log(f"cleanup stop failed: {error}")
-
-
-def _start_vm(ctx: Context) -> lume.VmInfo:
-    info = _get_vm(ctx)
-    if info.status == "running":
-        _raise_click_error(f"VM is already running: {ctx.vm}")
-    if info.status != "stopped":
-        _raise_click_error(f"VM is not stopped: {ctx.vm} ({info.status})")
-
-    launch = None
-    try:
-        launch = lume.spawn_vm(ctx.vm, debug=ctx.debug)
-        ready_vm = lume.wait_for_running_vm(
-            ctx.vm,
-            timeout=START_TIMEOUT_SECONDS,
-            debug=ctx.debug,
-            launch=launch,
-        )
-        ready_ip = ready_vm.ip_address
-        assert ready_ip is not None
-        probe_ssh(ready_ip, debug=ctx.debug, timeout=SSH_TIMEOUT_SECONDS)
-        _restart_talon(
-            ready_ip,
-            debug=ctx.debug,
-            wipe_user_dir=True,
-            clean_logs=True,
-        )
-    except (lume.LumeError, RemoteCommandError, TransportError) as error:
-        if launch is not None and launch.process.poll() is None:
-            _cleanup_failed_start(ctx)
-        _raise_click_error(str(error))
-    lume.cleanup_launch_log(launch.log_path)
-
-    return ready_vm
-
-
-def _stop_vm(ctx: Context) -> None:
-    info = _get_vm(ctx)
-    if info.status != "stopped":
-        if info.status == "running" and info.ip_address:
-            try:
-                _logout_guest_session(info.ip_address, debug=ctx.debug)
-            except (RemoteCommandError, TransportError) as error:
-                ctx.debug_log(f"guest logout failed: {error}")
-        try:
-            lume.stop_vm(ctx.vm, debug=ctx.debug)
-            lume.wait_for_status(ctx.vm, "stopped", timeout=60.0, debug=ctx.debug)
-        except lume.LumeError as error:
-            ctx.debug_log(f"graceful stop failed: {error}")
-            try:
-                lume.force_stop_vm(ctx.vm, debug=ctx.debug)
-                lume.wait_for_status(ctx.vm, "stopped", timeout=20.0, debug=ctx.debug)
-            except lume.LumeError as force_error:
-                _raise_click_error(str(force_error))
-
-
-def _capture_screenshot(ctx: Context, filepath: Path) -> None:
-    ip_address = _get_running_vm_ip(ctx)
-    filepath = _normalize_local_output_path(filepath)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}.png"
-    try:
-        wait_for_talon_repl(
-            ip_address,
-            debug=ctx.debug,
-            timeout=TALON_REPL_TIMEOUT_SECONDS,
-        )
-        result = run_remote_repl(
-            ip_address,
-            build_screenshot_payload(remote_path),
-            debug=ctx.debug,
-        )
-        if result.returncode:
-            raise click.exceptions.Exit(result.returncode)
-        download_from_guest(
-            ip_address,
-            remote_path,
-            filepath,
-            debug=ctx.debug,
-        )
-    except (RemoteCommandError, TransportError) as error:
-        _raise_click_error(str(error))
-    finally:
-        try:
-            run_remote_shell(
-                ip_address,
-                f'rm -f "{remote_path}"',
-                debug=ctx.debug,
-            )
-        except (RemoteCommandError, TransportError):
-            pass
-
-
-def _run_mimic(ctx: Context, command: str) -> None:
-    ip_address = _get_running_vm_ip(ctx)
-    wait_for_talon_repl(
-        ip_address,
-        debug=ctx.debug,
-        timeout=TALON_REPL_TIMEOUT_SECONDS,
-    )
-    result = run_remote_repl(
-        ip_address,
-        build_mimic_payload(command),
-        debug=ctx.debug,
-    )
-    if result.returncode:
-        raise click.exceptions.Exit(result.returncode)
-
-
-def _smoke_log(status: str, message: str | Path) -> None:
-    click.echo(f"{status} {message}")
-
-
-def _write_smoke_test_bundle(bundle_dir: Path, marker_path: str, token: str) -> None:
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-    (bundle_dir / "talonbox_smoke_test.talon").write_text(
-        "-\ntalonbox smoke test:\n    user.talonbox_smoke_test()\n",
-        encoding="utf-8",
-    )
-    (bundle_dir / "talonbox_smoke_test.py").write_text(
-        "\n".join(
-            [
-                "from pathlib import Path",
-                "",
-                "from talon import Module",
-                "",
-                "mod = Module()",
-                "",
-                "@mod.action_class",
-                "class Actions:",
-                "    def talonbox_smoke_test() -> None:",
-                '        """Write the talonbox smoke-test marker file."""',
-                f"        Path({marker_path!r}).write_text({token!r}, encoding='utf-8')",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
-def _verify_smoke_test_marker(ctx: Context, marker_path: str, token: str) -> None:
-    ip_address = _get_running_vm_ip(ctx)
-    result = run_remote_shell(
-        ip_address,
-        ["cat", marker_path],
-        debug=ctx.debug,
-        check=False,
-    )
-    if result.returncode != 0:
-        _raise_click_error(
-            result.stderr.strip()
-            or result.stdout.strip()
-            or f"Smoke test marker was not created: {marker_path}"
-        )
-    if result.stdout.strip() != token:
-        _raise_click_error(
-            f"Smoke test marker contents did not match expected token: {marker_path}"
-        )
-
-
-def _validate_smoke_test_screenshot(path: Path) -> None:
-    if not path.exists():
-        _raise_click_error(f"Smoke test screenshot was not created: {path}")
-    if path.stat().st_size <= 0:
-        _raise_click_error(f"Smoke test screenshot was empty: {path}")
-    with path.open("rb") as handle:
-        signature = handle.read(8)
-    if signature != b"\x89PNG\r\n\x1a\n":
-        _raise_click_error(f"Smoke test screenshot was not a PNG file: {path}")
-
-
-def _trigger_smoke_test_visual_change(ctx: Context, token: str) -> None:
-    ip_address = _get_running_vm_ip(ctx)
-    dialog_log = f"/tmp/talonbox-smoke-test-dialog-{token}.log"
-    script = (
-        f'display dialog "talonbox screenshot test {token}" '
-        'buttons {"OK"} default button 1 giving up after 15'
-    )
-    run_remote_shell(
-        ip_address,
-        (
-            f"nohup osascript -e {shlex.quote(script)} "
-            f">{shlex.quote(dialog_log)} 2>&1 & sleep 1"
-        ),
-        debug=ctx.debug,
-    )
-
-
-def _verify_smoke_test_screenshots_differ(before_path: Path, after_path: Path) -> None:
-    if before_path.read_bytes() == after_path.read_bytes():
-        _raise_click_error(
-            "Smoke test screenshots did not change after the guest visual change."
-        )
-
-
-def _print_smoke_test_hints(
-    *, debug_enabled: bool, screenshot_path: Path | None
-) -> None:
-    click.echo("HINT rerun with --debug for command traces and transport details.")
-    if debug_enabled:
-        click.echo("HINT --debug is already enabled; inspect the command trace above.")
-    click.echo(
-        "HINT inspect guest logs at ~/.talon/talon.log and /tmp/talonbox-talon.log."
-    )
-    if screenshot_path is not None:
-        click.echo(f"HINT inspect the saved screenshot at {screenshot_path}.")
+def _build_smoke_test_runner(settings: CliSettings) -> SmokeTestRunner:
+    vm_controller = VmController(settings.vm, settings.debug)
+    return SmokeTestRunner(vm_controller)
 
 
 @click.group(
@@ -648,7 +113,7 @@ def _print_smoke_test_hints(
 @click.version_option(prog_name="talonbox")
 @click.pass_context
 def cli(click_ctx: click.Context, vm: str, debug: bool) -> None:
-    click_ctx.obj = Context(vm=vm, debug=debug)
+    click_ctx.obj = CliSettings(vm=vm, debug=debug)
 
 
 @cli.command(
@@ -657,7 +122,7 @@ def cli(click_ctx: click.Context, vm: str, debug: bool) -> None:
     epilog=_examples_epilog("talonbox setup"),
 )
 def setup() -> None:
-    _raise_click_error("setup is not implemented yet")
+    raise click.ClickException("setup is not implemented yet")
 
 
 @cli.command(
@@ -674,9 +139,10 @@ def setup() -> None:
         "talonbox --vm talon-test --debug start",
     ),
 )
-@pass_context
-def start(ctx: Context) -> None:
-    _print_vm_info(_start_vm(ctx))
+@pass_settings
+def start(settings: CliSettings) -> None:
+    vm_controller = VmController(settings.vm, settings.debug)
+    _echo_vm_info(vm_controller, vm_controller.start().to_vm_info())
 
 
 @cli.command(
@@ -691,17 +157,12 @@ def start(ctx: Context) -> None:
         "talonbox --debug restart-talon",
     ),
 )
-@pass_context
-def restart_talon(ctx: Context) -> None:
-    try:
-        _restart_talon(
-            _get_running_vm_ip(ctx),
-            debug=ctx.debug,
-            wipe_user_dir=False,
-            clean_logs=True,
-        )
-    except (RemoteCommandError, TransportError) as error:
-        _raise_click_error(str(error))
+@pass_settings
+def restart_talon(settings: CliSettings) -> None:
+    VmController(settings.vm, settings.debug).restart_talon(
+        wipe_user_dir=False,
+        clean_logs=True,
+    )
 
 
 @cli.command(
@@ -714,9 +175,9 @@ def restart_talon(ctx: Context) -> None:
         "talonbox --vm talon-test stop",
     ),
 )
-@pass_context
-def stop(ctx: Context) -> None:
-    _stop_vm(ctx)
+@pass_settings
+def stop(settings: CliSettings) -> None:
+    VmController(settings.vm, settings.debug).stop()
 
 
 @cli.command(
@@ -741,178 +202,9 @@ def stop(ctx: Context) -> None:
     is_flag=True,
     help="Skip the confirmation prompt if the VM is already running.",
 )
-@pass_context
-def smoke_test(ctx: Context, yes: bool) -> None:
-    artifact_dir = HOST_OUTPUT_ROOT / f"talonbox-smoke-test-{uuid.uuid4().hex}"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    baseline_screenshot_path = artifact_dir / "screenshot-before-dialog.png"
-    screenshot_path = artifact_dir / "screenshot-after-dialog.png"
-    bundle_dir = artifact_dir / "bundle"
-    marker_path = f"/tmp/talonbox-smoke-test-marker-{uuid.uuid4().hex}.txt"
-    token = uuid.uuid4().hex
-    started = False
-
-    def hint_screenshot() -> Path | None:
-        if screenshot_path.exists():
-            return screenshot_path
-        if baseline_screenshot_path.exists():
-            return baseline_screenshot_path
-        return None
-
-    def fail(message: str) -> None:
-        _smoke_log("FAIL", message)
-        _print_smoke_test_hints(
-            debug_enabled=ctx.debug,
-            screenshot_path=hint_screenshot(),
-        )
-        raise click.exceptions.Exit(1)
-
-    def run_step(
-        name: str,
-        action: Callable[[], object],
-        *,
-        success_message: str | None = None,
-    ) -> object:
-        _smoke_log("STEP", name)
-        try:
-            result = action()
-        except click.ClickException as error:
-            fail(f"{name}: {error.message}")
-        except click.exceptions.Exit as error:
-            exit_code = getattr(error, "exit_code", 1)
-            fail(f"{name}: command exited with status {exit_code}")
-        except Exception as error:
-            fail(f"{name}: {error}")
-        else:
-            _smoke_log("PASS", success_message or name)
-            return result
-
-    def upload_bundle() -> None:
-        returncode = run_rsync(
-            _prepare_transfer_args(
-                ctx,
-                [
-                    "-av",
-                    f"{bundle_dir}/",
-                    "guest:/Users/lume/.talon/user/talonbox_smoke_test/",
-                ],
-                value_options=RSYNC_VALUE_OPTIONS,
-                rejected_options=RSYNC_REJECTED_OPTIONS,
-            ),
-            debug=ctx.debug,
-        )
-        if returncode:
-            _raise_click_error(f"rsync failed with exit code {returncode}")
-
-    _smoke_log("ARTIFACT", artifact_dir)
-
-    try:
-        info = run_step(
-            "Inspect VM status",
-            lambda: _get_vm(ctx),
-            success_message="VM status checked.",
-        )
-        assert isinstance(info, lume.VmInfo)
-        if info.status not in {"running", "stopped"}:
-            _raise_click_error(
-                f"VM is not ready for smoke-test: {ctx.vm} ({info.status})"
-            )
-
-        if info.status == "running":
-            message = (
-                f"VM {ctx.vm} is already running. smoke-test must stop and restart it before "
-                "continuing."
-            )
-            click.echo(message)
-            if not yes and not click.confirm(
-                "Continue with smoke-test?", default=False
-            ):
-                _smoke_log("FAIL", "smoke-test canceled by user; VM left running.")
-                raise click.exceptions.Exit(1)
-            run_step(
-                "Stop the running VM before smoke-test",
-                lambda: _stop_vm(ctx),
-                success_message="Running VM stopped.",
-            )
-
-        run_step(
-            "Start the VM and reset Talon",
-            lambda: _start_vm(ctx),
-            success_message="VM started and Talon reset.",
-        )
-        started = True
-
-        run_step(
-            "Write the temporary Talon smoke-test bundle",
-            lambda: _write_smoke_test_bundle(bundle_dir, marker_path, token),
-            success_message="Temporary Talon bundle written.",
-        )
-        run_step(
-            "Upload the Talon smoke-test bundle with rsync",
-            upload_bundle,
-            success_message="Temporary Talon bundle uploaded.",
-        )
-        run_step(
-            "Restart Talon to load the uploaded bundle",
-            lambda: _restart_talon(
-                _get_running_vm_ip(ctx),
-                debug=ctx.debug,
-                wipe_user_dir=False,
-                clean_logs=True,
-            ),
-            success_message="Talon restarted after upload.",
-        )
-        run_step(
-            "Run mimic for 'talonbox smoke test'",
-            lambda: _run_mimic(ctx, "talonbox smoke test"),
-            success_message="mimic succeeded.",
-        )
-        run_step(
-            "Verify the guest smoke-test marker",
-            lambda: _verify_smoke_test_marker(ctx, marker_path, token),
-            success_message="Guest marker verified.",
-        )
-        run_step(
-            "Capture a baseline screenshot",
-            lambda: _capture_screenshot(ctx, baseline_screenshot_path),
-            success_message="Baseline screenshot captured.",
-        )
-        run_step(
-            "Validate the baseline screenshot artifact",
-            lambda: _validate_smoke_test_screenshot(baseline_screenshot_path),
-            success_message="Baseline screenshot artifact validated.",
-        )
-        run_step(
-            "Trigger a visible guest dialog",
-            lambda: _trigger_smoke_test_visual_change(ctx, token),
-            success_message="Guest dialog triggered.",
-        )
-        run_step(
-            "Capture a second screenshot after the guest dialog",
-            lambda: _capture_screenshot(ctx, screenshot_path),
-            success_message="Second screenshot captured.",
-        )
-        run_step(
-            "Validate the second screenshot artifact",
-            lambda: _validate_smoke_test_screenshot(screenshot_path),
-            success_message="Second screenshot artifact validated.",
-        )
-        run_step(
-            "Verify the screenshots changed after the guest dialog",
-            lambda: _verify_smoke_test_screenshots_differ(
-                baseline_screenshot_path, screenshot_path
-            ),
-            success_message="Screenshots changed after the guest dialog.",
-        )
-    finally:
-        if started:
-            run_step(
-                "Stop the VM after smoke-test",
-                lambda: _stop_vm(ctx),
-                success_message="VM stopped after smoke-test.",
-            )
-
-    _smoke_log("PASS", "Smoke test completed successfully.")
+@pass_settings
+def smoke_test(settings: CliSettings, yes: bool) -> None:
+    _build_smoke_test_runner(settings).run(yes=yes)
 
 
 @cli.command(
@@ -928,10 +220,10 @@ def smoke_test(ctx: Context, yes: bool) -> None:
         "talonbox --vm talon-test show",
     ),
 )
-@pass_context
-def show(ctx: Context) -> None:
-    info = _get_vm(ctx)
-    _print_vm_info(info)
+@pass_settings
+def show(settings: CliSettings) -> None:
+    vm_controller = VmController(settings.vm, settings.debug)
+    _echo_vm_info(vm_controller, vm_controller.get_vm())
 
 
 @cli.command(
@@ -949,16 +241,18 @@ def show(ctx: Context) -> None:
     ),
 )
 @click.argument("command", nargs=-1, type=click.UNPROCESSED, metavar="COMMAND...")
-@pass_context
-def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
+@pass_settings
+def exec_command(settings: CliSettings, command: tuple[str, ...]) -> None:
     if not command:
-        _raise_click_error("No command provided")
-    result = run_remote_shell(
-        _get_running_vm_ip(ctx),
-        command[0] if len(command) == 1 else list(command),
-        debug=ctx.debug,
-        stream=True,
-        check=False,
+        raise click.ClickException("No command provided")
+    result = (
+        VmController(settings.vm, settings.debug)
+        .get_running_vm()
+        .run_shell(
+            command[0] if len(command) == 1 else list(command),
+            stream=True,
+            check=False,
+        )
     )
     if result.returncode:
         raise click.exceptions.Exit(result.returncode)
@@ -980,18 +274,10 @@ def exec_command(ctx: Context, command: tuple[str, ...]) -> None:
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
-@pass_context
-def rsync(ctx: Context, args: tuple[str, ...]) -> None:
-    rewritten_args = _prepare_transfer_args(
-        ctx,
-        args,
-        value_options=RSYNC_VALUE_OPTIONS,
-        rejected_options=RSYNC_REJECTED_OPTIONS,
-    )
-    returncode = run_rsync(
-        rewritten_args,
-        debug=ctx.debug,
-    )
+@pass_settings
+def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
+    running_vm = VmController(settings.vm, settings.debug).get_running_vm()
+    returncode = TransferService(running_vm).rsync(args)
     if returncode:
         raise click.exceptions.Exit(returncode)
 
@@ -1012,18 +298,10 @@ def rsync(ctx: Context, args: tuple[str, ...]) -> None:
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="SCP_ARGS...")
-@pass_context
-def scp(ctx: Context, args: tuple[str, ...]) -> None:
-    rewritten_args = _prepare_transfer_args(
-        ctx,
-        args,
-        value_options=SCP_VALUE_OPTIONS,
-        rejected_options=SCP_REJECTED_OPTIONS,
-    )
-    returncode = run_scp(
-        rewritten_args,
-        debug=ctx.debug,
-    )
+@pass_settings
+def scp(settings: CliSettings, args: tuple[str, ...]) -> None:
+    running_vm = VmController(settings.vm, settings.debug).get_running_vm()
+    returncode = TransferService(running_vm).scp(args)
     if returncode:
         raise click.exceptions.Exit(returncode)
 
@@ -1041,27 +319,16 @@ def scp(ctx: Context, args: tuple[str, ...]) -> None:
     ),
 )
 @click.argument("code", required=False, metavar="[CODE]")
-@pass_context
-def repl(ctx: Context, code: str | None) -> None:
-    ip_address = _get_running_vm_ip(ctx)
-    wait_for_talon_repl(
-        ip_address,
-        debug=ctx.debug,
-        timeout=TALON_REPL_TIMEOUT_SECONDS,
-    )
+@pass_settings
+def repl(settings: CliSettings, code: str | None) -> None:
     if code is None:
         if sys.stdin.isatty():
-            _raise_click_error("No code provided. Pass CODE or pipe Python into stdin.")
+            raise click.ClickException(
+                "No code provided. Pass CODE or pipe Python into stdin."
+            )
         code = sys.stdin.read()
     assert code is not None
-    result = run_remote_repl(
-        ip_address,
-        build_repl_exec_payload(code),
-        debug=ctx.debug,
-        stream_output=True,
-    )
-    if result.returncode:
-        raise click.exceptions.Exit(result.returncode)
+    _build_talon_client(settings).repl(code)
 
 
 @cli.command(
@@ -1073,9 +340,9 @@ def repl(ctx: Context, code: str | None) -> None:
     ),
 )
 @click.argument("command", metavar="PHRASE")
-@pass_context
-def mimic(ctx: Context, command: str) -> None:
-    _run_mimic(ctx, command)
+@pass_settings
+def mimic(settings: CliSettings, command: str) -> None:
+    _build_talon_client(settings).mimic(command)
 
 
 @cli.command(
@@ -1092,9 +359,9 @@ def mimic(ctx: Context, command: str) -> None:
 @click.argument(
     "filepath", metavar="HOST_PATH", type=click.Path(dir_okay=False, path_type=Path)
 )
-@pass_context
-def screenshot(ctx: Context, filepath: Path) -> None:
-    _capture_screenshot(ctx, filepath)
+@pass_settings
+def screenshot(settings: CliSettings, filepath: Path) -> None:
+    _build_talon_client(settings).capture_screenshot(filepath)
 
 
 def main() -> int:

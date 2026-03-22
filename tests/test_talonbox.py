@@ -10,19 +10,13 @@ from click.testing import CliRunner
 
 from talonbox import cli as cli_module
 from talonbox import lume as lume_module
+from talonbox import vm as vm_module
 from talonbox.cli import cli
 from talonbox.lume import VmInfo
-from talonbox.talon import (
-    build_mimic_payload,
-    build_repl_exec_payload,
-)
-from talonbox.transport import (
-    download_from_guest,
-    run_remote_repl,
-    run_rsync,
-    run_scp,
-    wait_for_talon_repl,
-)
+from talonbox.smoke_test import SmokeTestRunner
+from talonbox.talon_client import TalonClient
+from talonbox.transfer import TransferService
+from talonbox.vm import RunningVm, VmController
 
 
 def _fake_launch(
@@ -45,12 +39,32 @@ def _set_vm_statuses(
         status, ip_address = remaining[0] if len(remaining) == 1 else remaining.pop(0)
         return VmInfo(vm, status, ip_address)
 
-    monkeypatch.setattr(cli_module.lume, "get_vm_info", fake_get_vm_info)
+    monkeypatch.setattr(vm_module.lume, "get_vm_info", fake_get_vm_info)
+
+
+def _build_service_stack(
+    vm: str = "talon-test", debug: bool = False
+) -> tuple[VmController, TransferService, TalonClient]:
+    vm_controller = VmController(vm, debug)
+    running_vm = _running_vm(debug=debug)
+    transfer_service = TransferService(running_vm)
+    talon_client = TalonClient(running_vm, transfer_service)
+    return vm_controller, transfer_service, talon_client
+
+
+def _running_vm(ip_address: str = "192.168.64.10", *, debug: bool = False) -> RunningVm:
+    return RunningVm(
+        name="talon-test",
+        ip_address=ip_address,
+        debug=debug,
+    )
 
 
 def test_version() -> None:
     runner = CliRunner()
+
     result = runner.invoke(cli, ["--version"])
+
     assert result.exit_code == 0
     assert result.output.startswith("talonbox, version ")
 
@@ -107,8 +121,295 @@ def test_smoke_test_help_mentions_artifacts_and_confirmation() -> None:
     assert "talonbox smoke-test --yes" in result.output
 
 
+def test_start_command_delegates_to_vm_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "start",
+        lambda self: _running_vm(),
+    )
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "format_vm_info",
+        lambda self, info: ["status: running", "ip: 192.168.64.10"],
+    )
+
+    result = runner.invoke(cli, ["start"])
+
+    assert result.exit_code == 0
+    assert result.output == "status: running\nip: 192.168.64.10\n"
+
+
+def test_show_command_delegates_to_vm_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "get_vm",
+        lambda self: VmInfo(self.vm, "running", "192.168.64.10"),
+    )
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "format_vm_info",
+        lambda self, info: ["status: running", "ip: 192.168.64.10"],
+    )
+
+    result = runner.invoke(cli, ["show"])
+
+    assert result.exit_code == 0
+    assert result.output == "status: running\nip: 192.168.64.10\n"
+
+
+def test_smoke_test_command_passes_yes_to_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[bool] = []
+
+    class FakeRunner:
+        def run(self, *, yes: bool, confirm: object = click.confirm) -> None:
+            del confirm
+            calls.append(yes)
+
+    monkeypatch.setattr(
+        cli_module, "_build_smoke_test_runner", lambda settings: FakeRunner()
+    )
+
+    result = runner.invoke(cli, ["smoke-test", "--yes"])
+
+    assert result.exit_code == 0
+    assert calls == [True]
+
+
+def test_repl_reads_stdin_when_no_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    payloads: list[str] = []
+
+    class FakeClient:
+        def repl(self, code: str) -> None:
+            payloads.append(code)
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings: FakeClient()
+    )
+
+    result = runner.invoke(cli, ["repl"], input="print(1)\n")
+
+    assert result.exit_code == 0
+    assert payloads == ["print(1)\n"]
+
+
+def test_vm_controller_format_vm_info_includes_vnc() -> None:
+    vm_controller = VmController("talon-test", False)
+
+    lines = vm_controller.format_vm_info(
+        VmInfo("talon-test", "running", "192.168.64.10", "vnc://127.0.0.1:5901")
+    )
+
+    assert lines == [
+        "status: running",
+        "ip: 192.168.64.10",
+        "username: lume",
+        "password: lume",
+        "vnc: vnc://127.0.0.1:5901",
+    ]
+
+
+def test_vm_controller_start_boots_vm_and_restarts_talon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("talon-test", False)
+    probe_calls: list[float] = []
+    restart_calls: list[tuple[bool, bool]] = []
+    running_vm = _running_vm()
+
+    _set_vm_statuses(monkeypatch, ("stopped", None))
+    monkeypatch.setattr(
+        vm_module.lume,
+        "spawn_vm",
+        lambda vm, debug=False: _fake_launch(),
+    )
+    monkeypatch.setattr(
+        vm_module.lume,
+        "wait_for_running_vm",
+        lambda vm, timeout, debug=False, launch=None: VmInfo(
+            vm, "running", "192.168.64.10"
+        ),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "_running_vm_from_info",
+        lambda info: running_vm,
+    )
+    monkeypatch.setattr(
+        running_vm,
+        "probe_ssh",
+        lambda *, timeout=0: probe_calls.append(timeout),
+    )
+    monkeypatch.setattr(
+        running_vm,
+        "restart_talon",
+        lambda *, wipe_user_dir, clean_logs: restart_calls.append(
+            (wipe_user_dir, clean_logs)
+        ),
+    )
+    monkeypatch.setattr(
+        vm_module.lume,
+        "cleanup_launch_log",
+        lambda log_path: None,
+    )
+
+    info = vm_controller.start()
+
+    assert info is running_vm
+    assert probe_calls == [vm_module.SSH_TIMEOUT_SECONDS]
+    assert restart_calls == [(True, True)]
+
+
+def test_vm_controller_start_cleans_up_failed_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("talon-test", True)
+    calls: list[object] = []
+    running_vm = _running_vm(debug=True)
+
+    _set_vm_statuses(monkeypatch, ("stopped", None))
+    monkeypatch.setattr(
+        vm_module.lume,
+        "spawn_vm",
+        lambda vm, debug=False: _fake_launch(),
+    )
+    monkeypatch.setattr(
+        vm_module.lume,
+        "wait_for_running_vm",
+        lambda vm, timeout, debug=False, launch=None: VmInfo(
+            vm, "running", "192.168.64.10"
+        ),
+    )
+
+    monkeypatch.setattr(
+        vm_controller,
+        "_running_vm_from_info",
+        lambda info: running_vm,
+    )
+
+    def fail_probe(*, timeout: float = 0.0) -> None:
+        del timeout
+        raise vm_module.TransportError("ssh failed: 192.168.64.10")
+
+    monkeypatch.setattr(running_vm, "probe_ssh", fail_probe)
+    monkeypatch.setattr(
+        vm_module.lume,
+        "stop_vm",
+        lambda vm, debug=False: calls.append(("stop_vm", vm)),
+    )
+    monkeypatch.setattr(
+        vm_module.lume,
+        "wait_for_status",
+        lambda vm, status, timeout, debug=False: (
+            calls.append(("wait_for_status", timeout)) or VmInfo(vm, "stopped", None)
+        ),
+    )
+
+    with pytest.raises(click.ClickException, match="ssh failed: 192.168.64.10"):
+        vm_controller.start()
+
+    assert calls == [("stop_vm", "talon-test"), ("wait_for_status", 30.0)]
+
+
+def test_running_vm_restart_talon_waits_for_repl_and_sleeps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running_vm = _running_vm()
+    calls: list[tuple[str, object]] = []
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        running_vm,
+        "run_shell",
+        lambda command, **kwargs: (
+            calls.append((running_vm.ip_address, command))
+            or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+    monkeypatch.setattr(
+        running_vm,
+        "wait_for_talon_repl",
+        lambda **kwargs: calls.append((running_vm.ip_address, "wait_for_talon_repl")),
+    )
+    monkeypatch.setattr(vm_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    running_vm.restart_talon(
+        wipe_user_dir=True,
+        clean_logs=True,
+    )
+
+    assert calls[0] == ("192.168.64.10", "pkill -x Talon >/dev/null 2>&1 || true")
+    assert calls[-1] == ("192.168.64.10", "wait_for_talon_repl")
+    assert sleeps == [vm_module.TALON_POST_RESTART_SETTLE_SECONDS]
+
+
+def test_vm_controller_stop_falls_back_to_force_stop_for_stuck_vm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("talon-test", False)
+    calls: list[tuple[str, object]] = []
+    running_vm = _running_vm()
+
+    monkeypatch.setattr(
+        vm_module.lume,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
+    )
+    monkeypatch.setattr(vm_controller, "_running_vm_from_info", lambda info: running_vm)
+    monkeypatch.setattr(
+        running_vm,
+        "logout_guest_session",
+        lambda: calls.append(("logout_guest_session", running_vm.ip_address)),
+    )
+    monkeypatch.setattr(
+        vm_module.lume,
+        "stop_vm",
+        lambda vm, debug=False: calls.append(("stop_vm", vm)),
+    )
+
+    def fake_wait_for_status(
+        vm: str, status: str, timeout: float, debug: bool = False
+    ) -> VmInfo:
+        del status, debug
+        calls.append(("wait_for_status", timeout))
+        if timeout == 60.0:
+            raise lume_module.LumeError(
+                "Timed out waiting for VM to reach status stopped: talon-test"
+            )
+        return VmInfo(vm, "stopped", None)
+
+    monkeypatch.setattr(vm_module.lume, "wait_for_status", fake_wait_for_status)
+    monkeypatch.setattr(
+        vm_module.lume,
+        "force_stop_vm",
+        lambda vm, debug=False: calls.append(("force_stop_vm", vm)),
+    )
+
+    vm_controller.stop()
+
+    assert calls == [
+        ("logout_guest_session", "192.168.64.10"),
+        ("stop_vm", "talon-test"),
+        ("wait_for_status", 60.0),
+        ("force_stop_vm", "talon-test"),
+        ("wait_for_status", 20.0),
+    ]
+
+
 def test_write_smoke_test_bundle_includes_action_docstring(tmp_path: Path) -> None:
-    cli_module._write_smoke_test_bundle(tmp_path, "/tmp/marker.txt", "token")
+    vm_controller, _, _ = _build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+
+    runner.write_bundle(tmp_path, "/tmp/marker.txt", "token")
 
     assert "user.talonbox_smoke_test()" in (
         tmp_path / "talonbox_smoke_test.talon"
@@ -121,22 +422,27 @@ def test_write_smoke_test_bundle_includes_action_docstring(tmp_path: Path) -> No
 def test_trigger_smoke_test_visual_change_uses_guest_dialog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    vm_controller, _, _ = _build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
     calls: list[tuple[str, str]] = []
-    ctx = cli_module.Context(vm="talon-test", debug=False)
-    monkeypatch.setattr(cli_module, "_get_running_vm_ip", lambda ctx: "192.168.64.10")
+    running_vm = _running_vm()
     monkeypatch.setattr(
-        cli_module,
-        "run_remote_shell",
-        lambda ip_address, command, debug=False: calls.append((ip_address, command))
-        or subprocess.CompletedProcess([], 0, "", ""),
+        running_vm,
+        "run_shell",
+        lambda command, **kwargs: (
+            calls.append((running_vm.ip_address, command))
+            or subprocess.CompletedProcess([], 0, "", "")
+        ),
     )
 
-    cli_module._trigger_smoke_test_visual_change(ctx, "abc123")
+    runner.trigger_visual_change(running_vm, "abc123")
 
     assert calls == [
         (
             "192.168.64.10",
-            'nohup osascript -e \'display dialog "talonbox screenshot test abc123" buttons {"OK"} default button 1 giving up after 15\' >/tmp/talonbox-smoke-test-dialog-abc123.log 2>&1 & sleep 1',
+            'nohup osascript -e \'display dialog "talonbox screenshot test abc123" '
+            'buttons {"OK"} default button 1 giving up after 15\' '
+            ">/tmp/talonbox-smoke-test-dialog-abc123.log 2>&1 & sleep 1",
         )
     ]
 
@@ -144,812 +450,346 @@ def test_trigger_smoke_test_visual_change_uses_guest_dialog(
 def test_verify_smoke_test_screenshots_differ_rejects_identical_files(
     tmp_path: Path,
 ) -> None:
+    vm_controller, _, _ = _build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
     before = tmp_path / "before.png"
     after = tmp_path / "after.png"
     before.write_bytes(b"same")
     after.write_bytes(b"same")
 
     with pytest.raises(click.ClickException, match="did not change"):
-        cli_module._verify_smoke_test_screenshots_differ(before, after)
+        runner.verify_screenshots_differ(before, after)
 
 
-def test_show_running_vm_prints_auth(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(cli, ["show"])
-
-    assert result.exit_code == 0
-    assert (
-        result.output
-        == "status: running\nip: 192.168.64.10\nusername: lume\npassword: lume\n"
-    )
-
-
-def test_show_running_vm_prints_vnc_link_when_available(
+def test_smoke_test_runner_cancellation_leaves_running_vm_untouched(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(
-            vm, "running", "192.168.64.10", "vnc://127.0.0.1:5901"
-        ),
-    )
-
-    result = runner.invoke(cli, ["show"])
-
-    assert result.exit_code == 0
-    assert (
-        result.output
-        == "status: running\nip: 192.168.64.10\nusername: lume\npassword: lume\nvnc: vnc://127.0.0.1:5901\n"
-    )
-
-
-def test_show_help_mentions_read_only_sandbox_safe_usage() -> None:
-    runner = CliRunner()
-
-    result = runner.invoke(cli, ["show", "--help"])
-
-    assert result.exit_code == 0
-    assert "VNC link" in result.output
-    assert "This command is read-only" in result.output
-    assert "safe to use in sandboxed environments" in result.output
-
-
-def test_start_refuses_running_vm(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(cli, ["start"])
-
-    assert result.exit_code == 1
-    assert "VM is already running" in result.output
-
-
-def test_start_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    calls: list[tuple[object, ...]] = []
-    launch = _fake_launch()
+    vm_controller, _, _ = _build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
 
     monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "stopped", None),
-    )
-
-    def fake_spawn(vm: str, debug: bool = False) -> object:
-        calls.append(("spawn", vm))
-        return launch
-
-    def fake_wait(
-        vm: str,
-        timeout: float,
-        debug: bool = False,
-        launch: lume_module.VmLaunch | None = None,
-    ) -> VmInfo:
-        calls.append(("wait", timeout))
-        calls.append(("launch", launch))
-        return VmInfo(vm, "running", "192.168.64.10")
-
-    monkeypatch.setattr(cli_module.lume, "spawn_vm", fake_spawn)
-    monkeypatch.setattr(cli_module.lume, "wait_for_running_vm", fake_wait)
-    monkeypatch.setattr(
-        cli_module,
-        "probe_ssh",
-        lambda ip, debug=False, timeout=0: calls.append(("probe", ip)),
+        vm_controller,
+        "get_vm",
+        lambda: VmInfo("talon-test", "running", "192.168.64.10"),
     )
     monkeypatch.setattr(
-        cli_module,
-        "_restart_talon",
-        lambda ip, *, debug, wipe_user_dir, clean_logs: calls.append(
-            ("restart_talon", ip, wipe_user_dir, clean_logs)
-        ),
-    )
-
-    result = runner.invoke(cli, ["start"])
-
-    assert result.exit_code == 0
-    assert (
-        result.output
-        == "status: running\nip: 192.168.64.10\nusername: lume\npassword: lume\n"
-    )
-    assert calls == [
-        ("spawn", "talon-test"),
-        ("wait", cli_module.START_TIMEOUT_SECONDS),
-        ("launch", launch),
-        ("probe", "192.168.64.10"),
-        ("restart_talon", "192.168.64.10", True, True),
-    ]
-
-
-def test_start_failure_stops_vm(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    calls: list[str] = []
-
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "stopped", None),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "spawn_vm",
-        lambda vm, debug=False: _fake_launch(),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "wait_for_running_vm",
-        lambda vm, timeout, debug=False, launch=None: VmInfo(
-            vm, "running", "192.168.64.10"
-        ),
-    )
-
-    def fail_probe(ip: str, debug: bool = False, timeout: float = 0) -> None:
-        raise cli_module.TransportError("ssh failed")
-
-    monkeypatch.setattr(cli_module, "probe_ssh", fail_probe)
-    monkeypatch.setattr(
-        cli_module.lume, "stop_vm", lambda vm, debug=False: calls.append("stop")
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "wait_for_status",
-        lambda vm, status, timeout, debug=False: calls.append("wait_for_status")
-        or VmInfo(vm, "stopped", None),
-    )
-
-    result = runner.invoke(cli, ["start"])
-
-    assert result.exit_code == 1
-    assert "ssh failed" in result.output
-    assert calls == ["stop", "wait_for_status"]
-
-
-def test_build_talon_terminal_launch_command_runs_talon_via_arch_in_terminal() -> None:
-    command = cli_module._build_talon_terminal_launch_command()
-
-    assert "printf %s " in command
-    assert "chmod +x /tmp/talonbox-launch.command" in command
-    assert "open -a Terminal /tmp/talonbox-launch.command" in command
-    assert (
-        "exec arch -x86_64 /Applications/Talon.app/Contents/MacOS/Talon >/tmp/talonbox-talon.log 2>&1"
-        in command
-    )
-
-
-def test_logout_guest_session_uses_single_remote_command() -> None:
-    calls: list[tuple[str, str, float]] = []
-
-    def fake_run_remote_shell(
-        ip_address: str,
-        command: str,
-        *,
-        debug: bool = False,
-        timeout: float | None = None,
-        poll: bool = False,
-        stream: bool = False,
-        check: bool = True,
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append((ip_address, command, timeout or 0))
-        return subprocess.CompletedProcess([], 0, "", "")
-
-    original = cli_module.run_remote_shell
-    cli_module.run_remote_shell = fake_run_remote_shell
-    try:
-        cli_module._logout_guest_session("192.168.64.10", debug=False)
-    finally:
-        cli_module.run_remote_shell = original
-
-    assert calls == [
-        (
-            "192.168.64.10",
-            "launchctl bootout gui/$(id -u) >/dev/null 2>&1 || true; while pgrep -x Talon >/dev/null 2>&1; do sleep 1; done",
-            15.0,
-        )
-    ]
-
-
-def test_restart_talon_help_mentions_log_reset() -> None:
-    runner = CliRunner()
-
-    result = runner.invoke(cli, ["restart-talon", "--help"])
-
-    assert result.exit_code == 0
-    assert (
-        "Restart Talon inside the running VM without rebooting the VM." in result.output
-    )
-    assert "~/.talon/talon.log" in result.output
-
-
-def test_restart_talon_restarts_without_wiping_user_dir(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    calls: list[str] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    def fake_restart(
-        ip_address: str, *, debug: bool, wipe_user_dir: bool, clean_logs: bool
-    ) -> None:
-        calls.append(ip_address)
-        assert debug is False
-        assert wipe_user_dir is False
-        assert clean_logs is True
-
-    monkeypatch.setattr(cli_module, "_restart_talon", fake_restart)
-
-    result = runner.invoke(cli, ["restart-talon"])
-
-    assert result.exit_code == 0
-    assert result.output == ""
-    assert calls == ["192.168.64.10"]
-
-
-def test_restart_talon_waits_for_post_restart_settle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    shell_calls: list[str] = []
-    sleeps: list[float] = []
-
-    monkeypatch.setattr(
-        cli_module,
-        "run_remote_shell",
-        lambda ip_address, command, **kwargs: shell_calls.append(str(command))
-        or subprocess.CompletedProcess([], 0, "", ""),
-    )
-    monkeypatch.setattr(
-        cli_module, "wait_for_talon_repl", lambda ip_address, **kwargs: None
-    )
-    monkeypatch.setattr(
-        cli_module.time, "sleep", lambda seconds: sleeps.append(seconds)
-    )
-
-    cli_module._restart_talon(
-        "192.168.64.10",
-        debug=False,
-        wipe_user_dir=False,
-        clean_logs=True,
-    )
-
-    assert shell_calls
-    assert sleeps == [cli_module.TALON_POST_RESTART_SETTLE_SECONDS]
-
-
-def test_stop_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "stopped", None),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "stop_vm",
-        lambda vm, debug=False: pytest.fail("stop_vm should not be called"),
-    )
-
-    result = runner.invoke(cli, ["stop"])
-
-    assert result.exit_code == 0
-    assert result.output == ""
-
-
-def test_stop_logs_out_guest_session_before_stopping_vm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    calls: list[tuple[str, object]] = []
-
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_logout_guest_session",
-        lambda ip_address, *, debug: calls.append(("logout", ip_address)),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "stop_vm",
-        lambda vm, debug=False: calls.append(("stop_vm", vm)),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "wait_for_status",
-        lambda vm, status, timeout, debug=False: calls.append(
-            ("wait_for_status", timeout)
-        )
-        or VmInfo(vm, "stopped", None),
-    )
-
-    result = runner.invoke(cli, ["stop"])
-
-    assert result.exit_code == 0
-    assert result.output == ""
-    assert calls == [
-        ("logout", "192.168.64.10"),
-        ("stop_vm", "talon-test"),
-        ("wait_for_status", 60.0),
-    ]
-
-
-def test_stop_continues_when_guest_logout_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    calls: list[tuple[str, object]] = []
-
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    def fail_logout(ip_address: str, *, debug: bool) -> None:
-        raise cli_module.RemoteCommandError("logout failed")
-
-    monkeypatch.setattr(cli_module, "_logout_guest_session", fail_logout)
-    monkeypatch.setattr(
-        cli_module.lume,
-        "stop_vm",
-        lambda vm, debug=False: calls.append(("stop_vm", vm)),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "wait_for_status",
-        lambda vm, status, timeout, debug=False: calls.append(
-            ("wait_for_status", timeout)
-        )
-        or VmInfo(vm, "stopped", None),
-    )
-
-    result = runner.invoke(cli, ["--debug", "stop"])
-
-    assert result.exit_code == 0
-    assert "guest logout failed: logout failed" in result.output
-    assert calls == [
-        ("stop_vm", "talon-test"),
-        ("wait_for_status", 60.0),
-    ]
-
-
-def test_stop_falls_back_to_force_stop_for_stuck_vm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_logout_guest_session",
-        lambda ip_address, *, debug: calls.append(("logout_guest_session", ip_address)),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "stop_vm",
-        lambda vm, debug=False: calls.append(("stop_vm", vm)),
-    )
-
-    def fake_wait_for_status(
-        vm: str, status: str, timeout: float, debug: bool = False
-    ) -> VmInfo:
-        calls.append(("wait_for_status", timeout))
-        if timeout == 60.0:
-            raise lume_module.LumeError(
-                "Timed out waiting for VM to reach status stopped: talon-test"
-            )
-        return VmInfo(vm, "stopped", None)
-
-    monkeypatch.setattr(cli_module.lume, "wait_for_status", fake_wait_for_status)
-    monkeypatch.setattr(
-        cli_module.lume,
-        "force_stop_vm",
-        lambda vm, debug=False: calls.append(("force_stop_vm", vm)),
-    )
-
-    result = runner.invoke(cli, ["stop"])
-
-    assert result.exit_code == 0
-    assert result.output == ""
-    assert calls == [
-        ("logout_guest_session", "192.168.64.10"),
-        ("stop_vm", "talon-test"),
-        ("wait_for_status", 60.0),
-        ("force_stop_vm", "talon-test"),
-        ("wait_for_status", 20.0),
-    ]
-
-
-def test_smoke_test_cancellation_leaves_running_vm_untouched(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module, "_stop_vm", lambda ctx: pytest.fail("_stop_vm should not be called")
-    )
-
-    result = runner.invoke(cli, ["smoke-test"], input="n\n")
-
-    assert result.exit_code == 1
-    assert "Continue with smoke-test?" in result.output
-    assert "FAIL smoke-test canceled by user; VM left running." in result.output
-
-
-def test_smoke_test_yes_skips_confirmation_prompt(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    runner = CliRunner()
-    steps: list[str] = []
-    monkeypatch.setattr(cli_module, "HOST_OUTPUT_ROOT", tmp_path.resolve())
-    _set_vm_statuses(monkeypatch, ("running", "192.168.64.10"))
-    monkeypatch.setattr(
-        cli_module,
-        "_stop_vm",
-        lambda ctx: steps.append("stop"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_start_vm",
-        lambda ctx: steps.append("start") or VmInfo(ctx.vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_write_smoke_test_bundle",
-        lambda bundle_dir, marker_path, token: steps.append("write_bundle"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "run_rsync",
-        lambda args, debug=False: steps.append("rsync") or 0,
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_restart_talon",
-        lambda ip_address, *, debug, wipe_user_dir, clean_logs: steps.append(
-            "restart_talon"
-        ),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_run_mimic",
-        lambda ctx, command: steps.append(f"mimic:{command}"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_verify_smoke_test_marker",
-        lambda ctx, marker_path, token: steps.append("verify_marker"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_capture_screenshot",
-        lambda ctx, path: steps.append("capture_screenshot")
-        or path.write_bytes(b"\x89PNG\r\n\x1a\npayload"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_trigger_smoke_test_visual_change",
-        lambda ctx, token: steps.append("show_dialog"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_verify_smoke_test_screenshots_differ",
-        lambda before, after: steps.append("verify_screenshot_diff"),
-    )
-
-    result = runner.invoke(cli, ["smoke-test", "--yes"])
-
-    assert result.exit_code == 0
-    assert "Continue with smoke-test?" not in result.output
-    assert steps == [
+        vm_controller,
         "stop",
+        lambda: pytest.fail("stop should not be called"),
+    )
+
+    with pytest.raises(click.exceptions.Exit) as error:
+        runner.run(yes=False, confirm=lambda prompt, default=False: False)
+
+    captured = capsys.readouterr()
+    assert error.value.exit_code == 1
+    assert "VM talon-test is already running." in captured.out
+    assert "FAIL smoke-test canceled by user; VM left running." in captured.out
+
+
+def test_smoke_test_runner_success_runs_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    vm_controller, _, _ = _build_service_stack()
+    runner = SmokeTestRunner(vm_controller, host_output_root=tmp_path.resolve())
+    steps: list[str] = []
+    running_vm = _running_vm()
+    transfer_service = TransferService(running_vm)
+
+    states = [VmInfo("talon-test", "stopped", None)]
+    monkeypatch.setattr(
+        vm_controller,
+        "get_vm",
+        lambda: states[0],
+    )
+    monkeypatch.setattr(
+        vm_controller,
         "start",
-        "write_bundle",
+        lambda: steps.append("start") or running_vm,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_build_transfer_service",
+        lambda running_vm_arg: transfer_service,
+    )
+    monkeypatch.setattr(
+        transfer_service,
         "rsync",
+        lambda args: steps.append("rsync") or 0,
+    )
+    monkeypatch.setattr(
+        vm_controller,
         "restart_talon",
+        lambda *, wipe_user_dir, clean_logs: steps.append(
+            f"restart:{wipe_user_dir}:{clean_logs}"
+        ),
+    )
+
+    class FakeClient:
+        def mimic(self, command: str) -> None:
+            steps.append(f"mimic:{command}")
+
+        def capture_screenshot(self, path: Path) -> None:
+            steps.append(f"capture:{path.name}")
+            path.write_bytes(b"\x89PNG\r\n\x1a\npayload")
+
+    monkeypatch.setattr(
+        runner,
+        "_build_talon_client",
+        lambda running_vm_arg, transfer_service_arg: FakeClient(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "verify_marker",
+        lambda running_vm_arg, marker_path, token: steps.append("verify_marker"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "trigger_visual_change",
+        lambda running_vm_arg, token: steps.append("show_dialog"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "verify_screenshots_differ",
+        lambda before, after: steps.append("verify_diff"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "stop",
+        lambda: steps.append("stop"),
+    )
+
+    runner.run(yes=False)
+
+    captured = capsys.readouterr()
+    assert "ARTIFACT " in captured.out
+    assert "PASS Smoke test completed successfully." in captured.out
+    assert steps == [
+        "start",
+        "rsync",
+        "restart:False:True",
         "mimic:talonbox smoke test",
         "verify_marker",
-        "capture_screenshot",
+        "capture:screenshot-before-dialog.png",
         "show_dialog",
-        "capture_screenshot",
-        "verify_screenshot_diff",
+        "capture:screenshot-after-dialog.png",
+        "verify_diff",
         "stop",
     ]
-
-
-def test_smoke_test_success_runs_end_to_end(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    runner = CliRunner()
-    probe_calls: list[tuple[str, float]] = []
-    restart_calls: list[tuple[str, bool, bool]] = []
-    rsync_calls: list[list[str]] = []
-    remote_shell_calls: list[object] = []
-    repl_payloads: list[str] = []
-    download_targets: list[Path] = []
-    stop_calls: list[str] = []
-
-    monkeypatch.setattr(cli_module, "HOST_OUTPUT_ROOT", tmp_path.resolve())
-    _set_vm_statuses(
-        monkeypatch,
-        ("stopped", None),
-        ("stopped", None),
-        ("running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "spawn_vm",
-        lambda vm, debug=False: _fake_launch(),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "wait_for_running_vm",
-        lambda vm, timeout, debug=False, launch=None: VmInfo(
-            vm, "running", "192.168.64.10"
-        ),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "probe_ssh",
-        lambda ip, debug=False, timeout=0: probe_calls.append((ip, timeout)),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_restart_talon",
-        lambda ip_address, *, debug, wipe_user_dir, clean_logs: restart_calls.append(
-            (ip_address, wipe_user_dir, clean_logs)
-        ),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "run_rsync",
-        lambda args, debug=False: rsync_calls.append(args) or 0,
-    )
-
-    def fake_run_remote_repl(
-        ip: str, payload: str, debug: bool = False, stream_output: bool = False
-    ) -> subprocess.CompletedProcess[str]:
-        repl_payloads.append(payload)
-        return subprocess.CompletedProcess([], 0, "", "")
-
-    monkeypatch.setattr(
-        cli_module, "wait_for_talon_repl", lambda ip, debug=False, timeout=0: None
-    )
-    monkeypatch.setattr(cli_module, "run_remote_repl", fake_run_remote_repl)
-
-    def fake_download(
-        ip: str, remote_path: str, local_path: Path, debug: bool = False
-    ) -> None:
-        download_targets.append(local_path)
-        local_path.write_bytes(b"\x89PNG\r\n\x1a\npayload")
-
-    monkeypatch.setattr(cli_module, "download_from_guest", fake_download)
-    monkeypatch.setattr(
-        cli_module,
-        "_trigger_smoke_test_visual_change",
-        lambda ctx, token: repl_payloads.append("show-dialog"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "_verify_smoke_test_screenshots_differ",
-        lambda before, after: repl_payloads.append("verify-diff"),
-    )
-
-    def fake_run_remote_shell(
-        ip: str,
-        command: str | list[str],
-        *,
-        debug: bool = False,
-        timeout: float | None = None,
-        poll: bool = False,
-        stream: bool = False,
-        check: bool = True,
-    ) -> subprocess.CompletedProcess[str]:
-        remote_shell_calls.append(command)
-        if isinstance(command, list) and command[0] == "cat":
-            artifact_dir = next(tmp_path.iterdir())
-            python_source = (
-                artifact_dir / "bundle" / "talonbox_smoke_test.py"
-            ).read_text(encoding="utf-8")
-            quoted = "write_text('"
-            start = python_source.index(quoted) + len(quoted)
-            end = python_source.index("'", start)
-            return subprocess.CompletedProcess([], 0, python_source[start:end], "")
-        return subprocess.CompletedProcess([], 0, "", "")
-
-    monkeypatch.setattr(cli_module, "run_remote_shell", fake_run_remote_shell)
-    monkeypatch.setattr(
-        cli_module,
-        "_logout_guest_session",
-        lambda ip_address, *, debug: stop_calls.append(f"logout:{ip_address}"),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "stop_vm",
-        lambda vm, debug=False: stop_calls.append(f"stop:{vm}"),
-    )
-    monkeypatch.setattr(
-        cli_module.lume,
-        "wait_for_status",
-        lambda vm, status, timeout, debug=False: VmInfo(vm, "stopped", None),
-    )
-
-    result = runner.invoke(cli, ["smoke-test"])
-
-    assert result.exit_code == 0
-    assert "ARTIFACT " in result.output
-    assert "PASS Smoke test completed successfully." in result.output
-    assert probe_calls == [("192.168.64.10", cli_module.SSH_TIMEOUT_SECONDS)]
-    assert restart_calls == [
-        ("192.168.64.10", True, True),
-        ("192.168.64.10", False, True),
-    ]
     artifact_dir = next(tmp_path.iterdir())
-    assert rsync_calls == [
-        [
-            "-av",
-            str(artifact_dir / "bundle") + "/",
-            "lume@192.168.64.10:/Users/lume/.talon/user/talonbox_smoke_test/",
-        ]
-    ]
-    assert build_mimic_payload("talonbox smoke test") in repl_payloads
-    assert any(
-        "screen.capture_rect(screen.main().rect, retina=False)" in payload
-        for payload in repl_payloads
-    )
-    assert "show-dialog" in repl_payloads
-    assert "verify-diff" in repl_payloads
-    assert download_targets == [
-        artifact_dir / "screenshot-before-dialog.png",
-        artifact_dir / "screenshot-after-dialog.png",
-    ]
-    assert stop_calls == ["logout:192.168.64.10", "stop:talon-test"]
+    assert (artifact_dir / "bundle" / "talonbox_smoke_test.talon").exists()
 
 
-def test_smoke_test_failure_after_start_still_stops_vm(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_smoke_test_runner_failure_after_start_still_stops_vm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runner = CliRunner()
+    vm_controller, _, _ = _build_service_stack()
+    runner = SmokeTestRunner(vm_controller, host_output_root=tmp_path.resolve())
     stop_calls: list[str] = []
-    monkeypatch.setattr(cli_module, "HOST_OUTPUT_ROOT", tmp_path.resolve())
-    _set_vm_statuses(monkeypatch, ("stopped", None), ("running", "192.168.64.10"))
+    transfer_service = TransferService(_running_vm())
+
     monkeypatch.setattr(
-        cli_module,
-        "_start_vm",
-        lambda ctx: VmInfo(ctx.vm, "running", "192.168.64.10"),
+        vm_controller,
+        "get_vm",
+        lambda: VmInfo("talon-test", "stopped", None),
     )
     monkeypatch.setattr(
-        cli_module,
-        "_write_smoke_test_bundle",
-        lambda bundle_dir, marker_path, token: None,
+        vm_controller,
+        "start",
+        lambda: _running_vm(),
     )
-    monkeypatch.setattr(cli_module, "run_rsync", lambda args, debug=False: 0)
     monkeypatch.setattr(
-        cli_module,
-        "_restart_talon",
-        lambda ip_address, *, debug, wipe_user_dir, clean_logs: (_ for _ in ()).throw(
+        runner,
+        "_build_transfer_service",
+        lambda running_vm_arg: transfer_service,
+    )
+    monkeypatch.setattr(transfer_service, "rsync", lambda args: 0)
+    monkeypatch.setattr(
+        vm_controller,
+        "restart_talon",
+        lambda *, wipe_user_dir, clean_logs: (_ for _ in ()).throw(
             click.ClickException("talon restart failed")
         ),
     )
-    monkeypatch.setattr(
-        cli_module,
-        "_stop_vm",
-        lambda ctx: stop_calls.append("stop"),
-    )
+    monkeypatch.setattr(vm_controller, "stop", lambda: stop_calls.append("stop"))
 
-    result = runner.invoke(cli, ["smoke-test"])
+    with pytest.raises(click.exceptions.Exit) as error:
+        runner.run(yes=False)
 
-    assert result.exit_code == 1
+    captured = capsys.readouterr()
+    assert error.value.exit_code == 1
     assert (
         "FAIL Restart Talon to load the uploaded bundle: talon restart failed"
-        in result.output
+        in captured.out
     )
     assert (
         "HINT inspect guest logs at ~/.talon/talon.log and /tmp/talonbox-talon.log."
-        in result.output
+        in captured.out
     )
     assert stop_calls == ["stop"]
 
 
-def test_smoke_test_rejects_invalid_screenshot(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_smoke_test_runner_rejects_invalid_screenshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runner = CliRunner()
+    vm_controller, _, _ = _build_service_stack()
+    runner = SmokeTestRunner(vm_controller, host_output_root=tmp_path.resolve())
     stop_calls: list[str] = []
-    monkeypatch.setattr(cli_module, "HOST_OUTPUT_ROOT", tmp_path.resolve())
-    _set_vm_statuses(monkeypatch, ("stopped", None), ("running", "192.168.64.10"))
+    running_vm = _running_vm()
+    transfer_service = TransferService(running_vm)
+
     monkeypatch.setattr(
-        cli_module,
-        "_start_vm",
-        lambda ctx: VmInfo(ctx.vm, "running", "192.168.64.10"),
+        vm_controller,
+        "get_vm",
+        lambda: VmInfo("talon-test", "stopped", None),
     )
     monkeypatch.setattr(
-        cli_module,
-        "_write_smoke_test_bundle",
-        lambda bundle_dir, marker_path, token: None,
-    )
-    monkeypatch.setattr(cli_module, "run_rsync", lambda args, debug=False: 0)
-    monkeypatch.setattr(
-        cli_module,
-        "_restart_talon",
-        lambda ip_address, *, debug, wipe_user_dir, clean_logs: None,
-    )
-    monkeypatch.setattr(cli_module, "_run_mimic", lambda ctx, command: None)
-    monkeypatch.setattr(
-        cli_module,
-        "_verify_smoke_test_marker",
-        lambda ctx, marker_path, token: None,
+        vm_controller,
+        "start",
+        lambda: running_vm,
     )
     monkeypatch.setattr(
-        cli_module,
-        "_capture_screenshot",
-        lambda ctx, path: path.write_bytes(b"not-a-png"),
+        runner,
+        "_build_transfer_service",
+        lambda running_vm_arg: transfer_service,
     )
+    monkeypatch.setattr(transfer_service, "rsync", lambda args: 0)
     monkeypatch.setattr(
-        cli_module,
-        "_stop_vm",
-        lambda ctx: stop_calls.append("stop"),
+        vm_controller,
+        "restart_talon",
+        lambda *, wipe_user_dir, clean_logs: None,
     )
 
-    result = runner.invoke(cli, ["smoke-test"])
+    class FakeClient:
+        def mimic(self, command: str) -> None:
+            return None
 
-    assert result.exit_code == 1
+        def capture_screenshot(self, path: Path) -> None:
+            path.write_bytes(b"not-a-png")
+
+    monkeypatch.setattr(
+        runner,
+        "_build_talon_client",
+        lambda running_vm_arg, transfer_service_arg: FakeClient(),
+    )
+    monkeypatch.setattr(
+        runner, "verify_marker", lambda running_vm_arg, marker_path, token: None
+    )
+    monkeypatch.setattr(vm_controller, "stop", lambda: stop_calls.append("stop"))
+
+    with pytest.raises(click.exceptions.Exit) as error:
+        runner.run(yes=False)
+
+    captured = capsys.readouterr()
+    assert error.value.exit_code == 1
     assert (
         "FAIL Validate the baseline screenshot artifact: Smoke test screenshot was not a PNG file"
-        in result.output
+        in captured.out
     )
-    assert "HINT inspect the saved screenshot at" in result.output
+    assert "HINT inspect the saved screenshot at" in captured.out
     assert stop_calls == ["stop"]
 
 
-def test_exec_passes_through_args_and_exit_code(
+def test_transfer_service_rsync_rewrites_guest_destination() -> None:
+    _, transfer_service, _ = _build_service_stack()
+
+    args = transfer_service.prepare_rsync_args(
+        ["-av", "./repo/", "guest:/Users/lume/.talon/user/repo/"]
+    )
+
+    assert args == [
+        "-av",
+        "./repo/",
+        "lume@192.168.64.10:/Users/lume/.talon/user/repo/",
+    ]
+
+
+def test_transfer_service_scp_download_rewrites_guest_source() -> None:
+    _, transfer_service, _ = _build_service_stack()
+
+    args = transfer_service.prepare_scp_args(["guest:/tmp/out.png", "/tmp/out.png"])
+
+    assert args == [
+        "lume@192.168.64.10:/tmp/out.png",
+        str(Path("/tmp/out.png").resolve(strict=False)),
+    ]
+
+
+def test_transfer_service_rejects_transport_override() -> None:
+    _, transfer_service, _ = _build_service_stack()
+
+    with pytest.raises(click.ClickException, match="Option not allowed"):
+        transfer_service.prepare_rsync_args(
+            ["-e", "ssh", "./repo/", "guest:/tmp/repo/"]
+        )
+
+
+def test_transfer_service_rejects_guest_to_guest() -> None:
+    _, transfer_service, _ = _build_service_stack()
+
+    with pytest.raises(click.ClickException, match="Guest-to-guest"):
+        transfer_service.prepare_scp_args(["guest:/tmp/a", "guest:/tmp/b"])
+
+
+def test_transfer_service_rejects_local_to_local() -> None:
+    _, transfer_service, _ = _build_service_stack()
+
+    with pytest.raises(
+        click.ClickException, match="Local-to-local transfers are not allowed"
+    ):
+        transfer_service.prepare_rsync_args(
+            ["-av", "./repo/", "/Users/lume/.talon/user/repo/"]
+        )
+
+
+def test_transfer_service_rejects_symlink_escape_from_tmp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, transfer_service, _ = _build_service_stack()
+    escape_root = tmp_path.resolve()
+    outside_dir = tmp_path.parent / "outside"
+    outside_dir.mkdir()
+    (escape_root / "link").symlink_to(outside_dir, target_is_directory=True)
+
+    monkeypatch.setattr(transfer_service, "_host_output_root", lambda: escape_root)
+
+    with pytest.raises(
+        click.ClickException, match="Symlinks that escape /tmp are not allowed."
+    ):
+        transfer_service.prepare_rsync_args(
+            ["-av", "guest:/tmp/out.txt", str(escape_root / "link" / "out.txt")]
+        )
+
+
+def test_exec_command_runs_guest_shell_and_propagates_exit_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = CliRunner()
+    running_vm = _running_vm()
     calls: list[tuple[str, list[str]]] = []
+
     monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
+        cli_module.VmController, "get_running_vm", lambda self: running_vm
     )
 
     def fake_exec(
-        ip: str,
         command_args: list[str],
-        debug: bool = False,
         stream: bool = False,
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
-        calls.append((ip, command_args))
+        calls.append((running_vm.ip_address, command_args))
         assert stream is True
         assert check is False
         return subprocess.CompletedProcess([], 7, "", "")
 
-    monkeypatch.setattr(cli_module, "run_remote_shell", fake_exec)
+    monkeypatch.setattr(running_vm, "run_shell", fake_exec)
 
     result = runner.invoke(cli, ["exec", "--", "echo", "hi"])
 
@@ -957,533 +797,114 @@ def test_exec_passes_through_args_and_exit_code(
     assert calls == [("192.168.64.10", ["echo", "hi"])]
 
 
-def test_exec_single_argument_uses_shell_string(
+def test_talon_client_repl_waits_for_socket_then_runs_script(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runner = CliRunner()
-    calls: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    def fake_shell(
-        ip: str,
-        command: str,
-        debug: bool = False,
-        stream: bool = False,
-        check: bool = True,
-    ) -> subprocess.CompletedProcess[str]:
-        calls.append((ip, command))
-        assert stream is True
-        assert check is False
-        return subprocess.CompletedProcess([], 0, "", "")
-
-    monkeypatch.setattr(cli_module, "run_remote_shell", fake_shell)
-
-    result = runner.invoke(cli, ["exec", "--", "ps aux | grep safari"])
-
-    assert result.exit_code == 0
-    assert calls == [("192.168.64.10", "ps aux | grep safari")]
-
-
-def test_rsync_help_mentions_guest_prefix() -> None:
-    runner = CliRunner()
-
-    result = runner.invoke(cli, ["rsync", "--help"])
-
-    assert result.exit_code == 0
-    assert "guest:/path" in result.output
-    assert "only `guest:` remote paths are allowed" in result.output
-
-
-def test_scp_help_mentions_guest_prefix() -> None:
-    runner = CliRunner()
-
-    result = runner.invoke(cli, ["scp", "--help"])
-
-    assert result.exit_code == 0
-    assert "guest:/path" in result.output
-    assert "only `guest:` remote paths are allowed" in result.output
-
-
-def test_rsync_upload_rewrites_guest_destination(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "run_rsync",
-        lambda args, debug=False: calls.append(args) or 0,
-    )
-
-    result = runner.invoke(
-        cli, ["rsync", "-av", "./repo/", "guest:/Users/lume/.talon/user/repo/"]
-    )
-
-    assert result.exit_code == 0
-    assert calls == [
-        ["-av", "./repo/", "lume@192.168.64.10:/Users/lume/.talon/user/repo/"]
-    ]
-
-
-def test_rsync_download_rewrites_guest_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "run_rsync",
-        lambda args, debug=False: calls.append(args) or 0,
-    )
-
-    result = runner.invoke(
-        cli, ["rsync", "-av", "guest:/Users/lume/Pictures/", "/tmp/guest-pictures/"]
-    )
-
-    assert result.exit_code == 0
-    assert calls == [
-        [
-            "-av",
-            "lume@192.168.64.10:/Users/lume/Pictures/",
-            str(Path("/tmp/guest-pictures").resolve(strict=False)),
-        ]
-    ]
-
-
-def test_rsync_allows_upload_from_outside_workspace(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "run_rsync",
-        lambda args, debug=False: calls.append(args) or 0,
-    )
-
-    result = runner.invoke(
-        cli,
-        [
-            "rsync",
-            "-av",
-            "/Users/jwstout/projects/wolfmanstout_talon/",
-            "guest:/tmp/wolfmanstout_talon/",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert calls == [
-        [
-            "-av",
-            "/Users/jwstout/projects/wolfmanstout_talon/",
-            "lume@192.168.64.10:/tmp/wolfmanstout_talon/",
-        ]
-    ]
-
-
-def test_rsync_rejects_download_outside_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(
-        cli, ["rsync", "-av", "guest:/tmp/out.txt", "/Users/jwstout/Downloads/out.txt"]
-    )
-
-    assert result.exit_code == 1
-    assert "Local output paths must stay under /tmp" in result.output
-
-
-def test_scp_rejects_download_outside_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(
-        cli, ["scp", "guest:/tmp/out.txt", "/Users/jwstout/Desktop/out.txt"]
-    )
-
-    assert result.exit_code == 1
-    assert "Local output paths must stay under /tmp" in result.output
-
-
-def test_rsync_rejects_guest_relative_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(cli, ["rsync", "-av", "./repo/", "guest:tmp/repo/"])
-
-    assert result.exit_code == 1
-    assert "Guest path must be absolute" in result.output
-
-
-def test_rsync_rejects_local_to_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(cli, ["rsync", "-av", "./repo/", "./copy/"])
-
-    assert result.exit_code == 1
-    assert "Local-to-local transfers are not allowed" in result.output
-
-
-def test_rsync_rejects_non_guest_remote(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(cli, ["rsync", "-av", "user@host:/tmp/x", "./copy/"])
-
-    assert result.exit_code == 1
-    assert "Only guest: remote paths are allowed" in result.output
-
-
-def test_rsync_rejects_old_implicit_guest_syntax(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(
-        cli, ["rsync", "-av", "./repo/", "/Users/lume/.talon/user/repo/"]
-    )
-
-    assert result.exit_code == 1
-    assert "Local-to-local transfers are not allowed" in result.output
-
-
-def test_rsync_rejects_transport_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(cli, ["rsync", "-e", "ssh", "./repo/", "guest:/tmp/repo/"])
-
-    assert result.exit_code == 1
-    assert "Option not allowed for VM-only transfer safety: -e" in result.output
-
-
-def test_rsync_rejects_host_write_option(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(
-        cli,
-        ["rsync", "--log-file=/tmp/talonbox-rsync.log", "./repo/", "guest:/tmp/repo/"],
-    )
-
-    assert result.exit_code == 1
-    assert "Option not allowed for VM-only transfer safety: --log-file" in result.output
-
-
-def test_scp_upload_rewrites_guest_destination(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "run_scp",
-        lambda args, debug=False: calls.append(args) or 0,
-    )
-
-    result = runner.invoke(
-        cli, ["scp", "./settings.talon", "guest:/Users/lume/.talon/user/settings.talon"]
-    )
-
-    assert result.exit_code == 0
-    assert calls == [
-        [
-            "./settings.talon",
-            "lume@192.168.64.10:/Users/lume/.talon/user/settings.talon",
-        ]
-    ]
-
-
-def test_scp_download_rewrites_guest_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "run_scp",
-        lambda args, debug=False: calls.append(args) or 0,
-    )
-
-    result = runner.invoke(cli, ["scp", "guest:/tmp/out.png", "/tmp/out.png"])
-
-    assert result.exit_code == 0
-    assert calls == [
-        [
-            "lume@192.168.64.10:/tmp/out.png",
-            str(Path("/tmp/out.png").resolve(strict=False)),
-        ]
-    ]
-
-
-def test_scp_rejects_transport_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(
-        cli, ["scp", "-S", "ssh", "./settings.talon", "guest:/tmp/settings.talon"]
-    )
-
-    assert result.exit_code == 1
-    assert "Option not allowed for VM-only transfer safety: -S" in result.output
-
-
-def test_scp_rejects_guest_to_guest(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(cli, ["scp", "guest:/tmp/a", "guest:/tmp/b"])
-
-    assert result.exit_code == 1
-    assert "Guest-to-guest transfers are not allowed" in result.output
-
-
-def test_rsync_rejects_symlink_escape_from_tmp(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    runner = CliRunner()
-    escape_root = tmp_path.resolve()
-    outside_dir = tmp_path.parent / "outside"
-    outside_dir.mkdir()
-    (escape_root / "link").symlink_to(outside_dir, target_is_directory=True)
-
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(cli_module, "_host_output_root", lambda: escape_root)
-
-    result = runner.invoke(
-        cli,
-        ["rsync", "-av", "guest:/tmp/out.txt", str(escape_root / "link" / "out.txt")],
-    )
-
-    assert result.exit_code == 1
-    assert "Symlinks that escape /tmp are not allowed." in result.output
-
-
-def test_scp_rejects_symlink_escape_from_tmp(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    runner = CliRunner()
-    escape_root = tmp_path.resolve()
-    outside_dir = tmp_path.parent / "outside-scp"
-    outside_dir.mkdir()
-    (escape_root / "link").symlink_to(outside_dir, target_is_directory=True)
-
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(cli_module, "_host_output_root", lambda: escape_root)
-
-    result = runner.invoke(
-        cli, ["scp", "guest:/tmp/out.txt", str(escape_root / "link" / "out.txt")]
-    )
-
-    assert result.exit_code == 1
-    assert "Symlinks that escape /tmp are not allowed." in result.output
-
-
-def test_repl_waits_for_socket_then_runs_piped_script(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
+    vm_controller, transfer_service, talon_client = _build_service_stack()
     waits: list[tuple[str, float]] = []
     payloads: list[tuple[str, str, bool]] = []
+
     monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
+        talon_client.running_vm,
         "wait_for_talon_repl",
-        lambda ip, debug=False, timeout=0: waits.append((ip, timeout)),
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: waits.append(
+            (talon_client.running_vm.ip_address, timeout)
+        ),
     )
     monkeypatch.setattr(
-        cli_module,
-        "run_remote_repl",
-        lambda ip, payload, debug=False, stream_output=False: payloads.append(
-            (ip, payload, stream_output)
-        )
-        or subprocess.CompletedProcess([], 0, "", ""),
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            payloads.append(
+                (talon_client.running_vm.ip_address, payload, stream_output)
+            )
+            or subprocess.CompletedProcess([], 0, "", "")
+        ),
     )
 
-    result = runner.invoke(cli, ["repl"], input="if True:\n    print(1)\nprint(2)\n")
+    talon_client.repl("if True:\n    print(1)\nprint(2)\n")
 
-    assert result.exit_code == 0
-    assert waits == [("192.168.64.10", cli_module.TALON_REPL_TIMEOUT_SECONDS)]
+    assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
     assert payloads == [
         (
             "192.168.64.10",
-            build_repl_exec_payload("if True:\n    print(1)\nprint(2)\n"),
+            "exec('if True:\\n    print(1)\\nprint(2)\\n')\n",
             True,
         )
     ]
 
 
-def test_repl_accepts_inline_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    payloads: list[tuple[str, str, bool]] = []
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module, "wait_for_talon_repl", lambda ip, debug=False, timeout=0: None
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "run_remote_repl",
-        lambda ip, payload, debug=False, stream_output=False: payloads.append(
-            (ip, payload, stream_output)
-        )
-        or subprocess.CompletedProcess([], 0, "", ""),
-    )
-
-    result = runner.invoke(cli, ["repl", "print(1+1)"])
-
-    assert result.exit_code == 0
-    assert payloads == [("192.168.64.10", build_repl_exec_payload("print(1+1)"), True)]
-
-
-def test_mimic_uses_python_escaped_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
-    payloads: list[str] = []
+def test_talon_client_mimic_uses_python_escaped_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller, transfer_service, talon_client = _build_service_stack()
     waits: list[tuple[str, float]] = []
+    payloads: list[str] = []
+
     monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(
-        cli_module,
+        talon_client.running_vm,
         "wait_for_talon_repl",
-        lambda ip, debug=False, timeout=0: waits.append((ip, timeout)),
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: waits.append(
+            (talon_client.running_vm.ip_address, timeout)
+        ),
     )
     monkeypatch.setattr(
-        cli_module,
-        "run_remote_repl",
-        lambda ip, payload, debug=False: payloads.append(payload)
-        or subprocess.CompletedProcess([], 0, "", ""),
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
+        ),
     )
 
-    result = runner.invoke(cli, ["mimic", 'say "hello"\nworld'])
+    talon_client.mimic('say "hello"\nworld')
 
-    assert result.exit_code == 0
-    assert waits == [("192.168.64.10", cli_module.TALON_REPL_TIMEOUT_SECONDS)]
-    assert payloads == [build_mimic_payload('say "hello"\nworld')]
+    assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
+    assert payloads == ["mimic('say \"hello\"\\nworld')\n"]
 
 
-def test_screenshot_uses_talon_capture_and_download(
+def test_talon_client_screenshot_uses_talon_capture_and_download(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    runner = CliRunner()
+    vm_controller, transfer_service, talon_client = _build_service_stack()
     repl_payloads: list[str] = []
     downloads: list[tuple[str, str, Path]] = []
     cleanup_commands: list[str] = []
     target = tmp_path / "shots" / "screen.png"
 
     monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-    monkeypatch.setattr(cli_module, "_host_output_root", lambda: tmp_path.resolve())
-    monkeypatch.setattr(
-        cli_module, "wait_for_talon_repl", lambda ip, debug=False, timeout=0: None
+        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
     )
     monkeypatch.setattr(
-        cli_module,
-        "run_remote_repl",
-        lambda ip, payload, debug=False: repl_payloads.append(payload)
-        or subprocess.CompletedProcess([], 0, "", ""),
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=0: None,
     )
     monkeypatch.setattr(
-        cli_module,
-        "download_from_guest",
-        lambda ip, remote, local, debug=False: downloads.append((ip, remote, local))
-        or local.write_bytes(b"not-a-png"),
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            repl_payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
+        ),
     )
     monkeypatch.setattr(
-        cli_module,
-        "run_remote_shell",
-        lambda ip, command, debug=False: cleanup_commands.append(command)
-        or subprocess.CompletedProcess([], 0, "", ""),
+        talon_client.running_vm,
+        "download",
+        lambda remote, local: (
+            downloads.append((talon_client.running_vm.ip_address, remote, local))
+            or local.write_bytes(b"not-a-png")
+        ),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_shell",
+        lambda command, **kwargs: (
+            cleanup_commands.append(command)
+            or subprocess.CompletedProcess([], 0, "", "")
+        ),
     )
 
-    result = runner.invoke(cli, ["screenshot", str(target)])
+    talon_client.capture_screenshot(target)
 
-    assert result.exit_code == 0
     assert target.parent.exists()
     assert "screen.capture_rect(screen.main().rect, retina=False)" in repl_payloads[0]
     assert (
@@ -1495,21 +916,15 @@ def test_screenshot_uses_talon_capture_and_download(
     assert cleanup_commands[0].startswith('rm -f "/tmp/talonbox-screenshot-')
 
 
-def test_screenshot_rejects_output_outside_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
-    runner = CliRunner()
+def test_talon_client_screenshot_rejects_output_outside_tmp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller, transfer_service, talon_client = _build_service_stack()
 
-    monkeypatch.setattr(
-        cli_module.lume,
-        "get_vm_info",
-        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
-    )
-
-    result = runner.invoke(
-        cli, ["screenshot", "/Users/jwstout/Desktop/guest-screen.png"]
-    )
-
-    assert result.exit_code == 1
-    assert "Local output paths must stay under /tmp" in result.output
+    with pytest.raises(
+        click.ClickException, match="Local output paths must stay under /tmp"
+    ):
+        talon_client.capture_screenshot(Path("/Users/jwstout/Desktop/guest-screen.png"))
 
 
 def test_get_vm_info_surfaces_raw_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1604,8 +1019,11 @@ def test_wait_for_running_vm_reports_launch_log_when_lume_run_exits_early(
         )
 
 
-def test_run_rsync_uses_fixed_vm_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transfer_service_rsync_uses_fixed_vm_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorded: list[list[str]] = []
+    _, transfer_service, _ = _build_service_stack()
 
     def fake_run(
         cmd: list[str], check: bool = False
@@ -1613,9 +1031,9 @@ def test_run_rsync_uses_fixed_vm_shell(monkeypatch: pytest.MonkeyPatch) -> None:
         recorded.append(cmd)
         return subprocess.CompletedProcess(cmd, 0)
 
-    monkeypatch.setattr("talonbox.transport.subprocess.run", fake_run)
+    monkeypatch.setattr("talonbox.transfer.subprocess.run", fake_run)
 
-    returncode = run_rsync(["-av", "src/", "lume@192.168.64.10:/tmp/dest"])
+    returncode = transfer_service.rsync(["-av", "src/", "guest:/tmp/dest"])
 
     assert returncode == 0
     assert recorded == [
@@ -1630,8 +1048,11 @@ def test_run_rsync_uses_fixed_vm_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
-def test_run_scp_uses_fixed_vm_ssh_options(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transfer_service_scp_uses_fixed_vm_ssh_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorded: list[list[str]] = []
+    _, transfer_service, _ = _build_service_stack()
 
     def fake_run(
         cmd: list[str], check: bool = False
@@ -1639,9 +1060,9 @@ def test_run_scp_uses_fixed_vm_ssh_options(monkeypatch: pytest.MonkeyPatch) -> N
         recorded.append(cmd)
         return subprocess.CompletedProcess(cmd, 0)
 
-    monkeypatch.setattr("talonbox.transport.subprocess.run", fake_run)
+    monkeypatch.setattr("talonbox.transfer.subprocess.run", fake_run)
 
-    returncode = run_scp(["./settings.talon", "lume@192.168.64.10:/tmp/settings.talon"])
+    returncode = transfer_service.scp(["./settings.talon", "guest:/tmp/settings.talon"])
 
     assert returncode == 0
     assert recorded == [
@@ -1674,8 +1095,9 @@ def test_run_scp_uses_fixed_vm_ssh_options(monkeypatch: pytest.MonkeyPatch) -> N
     ]
 
 
-def test_download_from_guest_uses_scp(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_running_vm_download_uses_scp(monkeypatch: pytest.MonkeyPatch) -> None:
     recorded: list[list[str]] = []
+    running_vm = _running_vm()
 
     def fake_run(
         cmd: list[str],
@@ -1690,9 +1112,9 @@ def test_download_from_guest_uses_scp(monkeypatch: pytest.MonkeyPatch) -> None:
         recorded.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr("talonbox.transport.subprocess.run", fake_run)
+    monkeypatch.setattr("talonbox.vm.subprocess.run", fake_run)
 
-    download_from_guest("192.168.64.10", "/tmp/out.png", Path("/tmp/out.png"))
+    running_vm.download("/tmp/out.png", Path("/tmp/out.png"))
 
     assert recorded == [
         [
@@ -1724,10 +1146,11 @@ def test_download_from_guest_uses_scp(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
-def test_run_remote_repl_retries_transient_ssh_failure(
+def test_running_vm_run_repl_retries_transient_ssh_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attempts = {"count": 0}
+    running_vm = _running_vm()
 
     def fake_run(**kwargs: object) -> subprocess.CompletedProcess[str]:
         del kwargs
@@ -1743,20 +1166,21 @@ def test_run_remote_repl_retries_transient_ssh_failure(
         return subprocess.CompletedProcess([], 0, "ok\n", "")
 
     monkeypatch.setattr(
-        "talonbox.transport.subprocess.run", lambda *args, **kwargs: fake_run(**kwargs)
+        "talonbox.vm.subprocess.run", lambda *args, **kwargs: fake_run(**kwargs)
     )
-    monkeypatch.setattr("talonbox.transport.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("talonbox.vm.time.sleep", lambda seconds: None)
 
-    result = run_remote_repl("192.168.64.10", "print('ok')\n")
+    result = running_vm.run_repl("print('ok')\n")
 
     assert result.returncode == 0
     assert attempts["count"] == 2
 
 
-def test_download_from_guest_retries_transient_ssh_failure(
+def test_running_vm_download_retries_transient_ssh_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attempts = {"count": 0}
+    running_vm = _running_vm()
 
     def fake_run(**kwargs: object) -> subprocess.CompletedProcess[str]:
         del kwargs
@@ -1772,35 +1196,35 @@ def test_download_from_guest_retries_transient_ssh_failure(
         return subprocess.CompletedProcess([], 0, "", "")
 
     monkeypatch.setattr(
-        "talonbox.transport.subprocess.run", lambda *args, **kwargs: fake_run(**kwargs)
+        "talonbox.vm.subprocess.run", lambda *args, **kwargs: fake_run(**kwargs)
     )
-    monkeypatch.setattr("talonbox.transport.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("talonbox.vm.time.sleep", lambda seconds: None)
 
-    download_from_guest("192.168.64.10", "/tmp/out.png", Path("/tmp/out.png"))
+    running_vm.download("/tmp/out.png", Path("/tmp/out.png"))
 
     assert attempts["count"] == 2
 
 
-def test_wait_for_talon_repl_checks_socket_path(
+def test_running_vm_wait_for_talon_repl_checks_socket_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str | list[str], bool, float, bool, bool]] = []
+    running_vm = _running_vm()
+    calls: list[tuple[str | list[str], float, bool, bool]] = []
 
-    def fake_run_remote_shell(
-        ip_address: str,
+    def fake_run_shell(
         command: str | list[str],
         *,
-        debug: bool = False,
         timeout: float | None = None,
         poll: bool = False,
         stream: bool = False,
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
-        calls.append((command, debug, timeout or 0.0, poll, check))
+        del stream
+        calls.append((command, timeout or 0.0, poll, check))
         return subprocess.CompletedProcess([], 0, "", "")
 
-    monkeypatch.setattr("talonbox.transport.run_remote_shell", fake_run_remote_shell)
+    monkeypatch.setattr(running_vm, "run_shell", fake_run_shell)
 
-    wait_for_talon_repl("192.168.64.10", timeout=12.0)
+    running_vm.wait_for_talon_repl(timeout=12.0)
 
-    assert calls == [('test -S "$HOME/.talon/.sys/repl.sock"', False, 12.0, True, True)]
+    assert calls == [('test -S "$HOME/.talon/.sys/repl.sock"', 12.0, True, True)]
