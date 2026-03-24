@@ -1,6 +1,6 @@
 [project]
 name = "talonbox"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "A local sandbox for testing Talon scripts. Inspired by playwright-cli."
 readme = "README.md"
 authors = [{name = "James Stout"}]
@@ -15,6 +15,21 @@ dependencies = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+# Hatch always includes the root .gitignore in sdists.
+exclude = [
+    "/.codex",
+    "/.github",
+    "/.gitattributes",
+    "/.pre-commit-config.yaml",
+    "/.python-version",
+    "/.uv-tools",
+    "/AGENTS.md",
+    "/CLAUDE.md",
+    "/uv.lock",
+    "/walkthrough.md",
+]
 
 [project.urls]
 Homepage = "https://github.com/wolfmanstout/talonbox"
