@@ -961,7 +961,7 @@ def test_talon_client_screenshot_rejects_output_outside_tmp(
     with pytest.raises(
         click.ClickException, match="Local output paths must stay under /tmp"
     ):
-        talon_client.capture_screenshot(Path("/Users/jwstout/Desktop/guest-screen.png"))
+        talon_client.capture_screenshot(Path("/private/var/guest-screen.png"))
 
 
 def test_get_vm_info_surfaces_raw_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:

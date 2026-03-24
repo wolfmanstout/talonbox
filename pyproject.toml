@@ -28,7 +28,6 @@ exclude = [
     "/AGENTS.md",
     "/CLAUDE.md",
     "/uv.lock",
-    "/walkthrough.md",
 ]
 
 [project.urls]

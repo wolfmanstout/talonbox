@@ -1,3 +1,4 @@
+.codex/
 .venv
 .uv-cache/
 __pycache__/
