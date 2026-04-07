@@ -1,0 +1,5 @@
+prefix_rule(
+    pattern = ["uv", "run", "talonbox"],
+    decision = "allow",
+    justification = "Relies on network access to access the VM.",
+)
