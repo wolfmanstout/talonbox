@@ -41,6 +41,7 @@ talonbox = "talonbox.cli:cli"
 
 [dependency-groups]
 dev = [
+    "basedpyright==1.39.3",
     "pytest",
 ]
 
@@ -62,6 +63,7 @@ select = [
 ignore = ["E501", "SIM105", "SIM116", "UP045"]
 
 [tool.pyright]
+typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.11"
