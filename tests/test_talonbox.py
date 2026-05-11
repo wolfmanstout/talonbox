@@ -834,6 +834,22 @@ def test_exec_command_runs_guest_shell_and_propagates_exit_code(
     assert calls == [("192.168.64.10", ["echo", "hi"])]
 
 
+def test_running_vm_streamed_transport_failure_does_not_require_captured_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running_vm = _running_vm()
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert kwargs["capture_output"] is False
+        return subprocess.CompletedProcess([], 1, None, None)
+
+    monkeypatch.setattr(vm_module.subprocess, "run", fake_run)
+
+    result = running_vm.run_shell("false", stream=True, check=False)
+
+    assert result.returncode == 1
+
+
 def test_talon_client_repl_waits_for_socket_then_runs_script(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

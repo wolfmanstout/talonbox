@@ -29,6 +29,10 @@ class RemoteCommandError(TransportError):
     pass
 
 
+def _process_output(result: subprocess.CompletedProcess[str]) -> str:
+    return (result.stderr or "").strip() or (result.stdout or "").strip()
+
+
 class RunningVm:
     SSH_USERNAME = "lume"
     SSH_PASSWORD = "lume"
@@ -143,7 +147,7 @@ class RunningVm:
             ],
         )
         if result.returncode != 0:
-            message = result.stderr.strip() or result.stdout.strip()
+            message = _process_output(result)
             if not message:
                 message = "failed to download file from guest"
             raise TransportError(message)
@@ -237,7 +241,7 @@ class RunningVm:
                 if result.returncode == 0:
                     return result
                 if attempts < TRANSIENT_RETRY_ATTEMPTS:
-                    message = (result.stderr.strip() or result.stdout.strip()).lower()
+                    message = _process_output(result).lower()
                     if any(
                         needle in message
                         for needle in (
