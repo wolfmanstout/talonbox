@@ -158,6 +158,14 @@ def spawn_vm(name: str, *, debug: bool = False) -> VmLaunch:
         return VmLaunch(process=process, log_path=Path(log_file.name))
 
 
+def clone_vm(source_name: str, target_name: str, *, debug: bool = False) -> None:
+    _run_lume(["clone", source_name, target_name], debug=debug)
+
+
+def delete_vm(name: str, *, debug: bool = False) -> None:
+    _run_lume(["delete", name, "--force"], debug=debug)
+
+
 def stop_vm(name: str, *, debug: bool = False) -> None:
     _run_lume(["stop", name], debug=debug)
 

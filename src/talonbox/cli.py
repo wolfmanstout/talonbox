@@ -10,9 +10,9 @@ import click
 from .smoke_test import SmokeTestRunner
 from .talon_client import TalonClient
 from .transfer import TransferService
-from .vm import VmController
+from .vm import DEFAULT_GOLDEN_VM, VmController
 
-DEFAULT_VM = "talon-test"
+DEFAULT_VM = "talonbox-live"
 HELP_COMMAND_GROUPS = (
     ("VM lifecycle", ("setup", "start", "restart-talon", "smoke-test", "stop", "show")),
     ("Guest shell", ("exec", "rsync", "scp")),
@@ -58,6 +58,7 @@ class TalonboxGroup(click.Group):
 @dataclass(slots=True)
 class CliSettings:
     vm: str
+    golden_vm: str
     debug: bool
 
 
@@ -77,14 +78,14 @@ def _echo_vm_info(vm_controller: VmController, info: object) -> None:
 
 
 def _build_talon_client(settings: CliSettings) -> TalonClient:
-    vm_controller = VmController(settings.vm, settings.debug)
+    vm_controller = VmController(settings.vm, settings.debug, settings.golden_vm)
     running_vm = vm_controller.get_running_vm()
     transfer_service = TransferService(running_vm)
     return TalonClient(running_vm, transfer_service)
 
 
 def _build_smoke_test_runner(settings: CliSettings) -> SmokeTestRunner:
-    vm_controller = VmController(settings.vm, settings.debug)
+    vm_controller = VmController(settings.vm, settings.debug, settings.golden_vm)
     return SmokeTestRunner(vm_controller)
 
 
@@ -112,6 +113,12 @@ def _build_smoke_test_runner(settings: CliSettings) -> SmokeTestRunner:
 )
 @click.option("--vm", default=DEFAULT_VM, show_default=True, help="Target VM name.")
 @click.option(
+    "--golden-vm",
+    default=DEFAULT_GOLDEN_VM,
+    show_default=True,
+    help="Golden VM to clone from during a fresh start.",
+)
+@click.option(
     "--debug",
     is_flag=True,
     envvar="TALONBOX_DEBUG",
@@ -119,9 +126,9 @@ def _build_smoke_test_runner(settings: CliSettings) -> SmokeTestRunner:
 )
 @click.version_option(prog_name="talonbox")
 @click.pass_context
-def cli(click_ctx: click.Context, vm: str, debug: bool) -> None:
+def cli(click_ctx: click.Context, vm: str, golden_vm: str, debug: bool) -> None:
     _require_macos()
-    click_ctx.obj = CliSettings(vm=vm, debug=debug)
+    click_ctx.obj = CliSettings(vm=vm, golden_vm=golden_vm, debug=debug)
 
 
 @cli.command(
@@ -134,23 +141,31 @@ def setup() -> None:
 
 
 @cli.command(
-    short_help="Boot the VM, wipe the Talon user dir, and restart Talon.",
+    short_help="Clone the golden VM, boot the target VM, and restart Talon.",
     help=(
-        "Start the VM in the background, wait for SSH, clear the guest Talon user directory, "
-        "and relaunch Talon under Rosetta.\n\n"
+        "Clone the golden VM to the target VM by default, start the target VM in the "
+        "background, wait for SSH, clear the guest Talon user directory, and relaunch "
+        "Talon under Rosetta.\n\n"
+        "Pass --resume to skip cloning and start the existing target VM instead.\n\n"
         "Talon is launched through Terminal so guest Screen Recording permissions apply to "
         "the process that captures screenshots.\n\n"
-        "The command fails if the VM is already running."
+        "The command fails if the target VM is already running."
     ),
     epilog=_examples_epilog(
         "talonbox start",
-        "talonbox --vm talon-test --debug start",
+        "talonbox --vm talonbox-live --golden-vm talonbox-golden --debug start",
+        "talonbox start --resume",
     ),
 )
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Start the existing target VM without cloning from the golden VM.",
+)
 @pass_settings
-def start(settings: CliSettings) -> None:
-    vm_controller = VmController(settings.vm, settings.debug)
-    _echo_vm_info(vm_controller, vm_controller.start().to_vm_info())
+def start(settings: CliSettings, resume: bool) -> None:
+    vm_controller = VmController(settings.vm, settings.debug, settings.golden_vm)
+    _echo_vm_info(vm_controller, vm_controller.start(resume=resume).to_vm_info())
 
 
 @cli.command(
@@ -167,7 +182,7 @@ def start(settings: CliSettings) -> None:
 )
 @pass_settings
 def restart_talon(settings: CliSettings) -> None:
-    VmController(settings.vm, settings.debug).restart_talon(
+    VmController(settings.vm, settings.debug, settings.golden_vm).restart_talon(
         wipe_user_dir=False,
         clean_logs=True,
     )
@@ -175,17 +190,15 @@ def restart_talon(settings: CliSettings) -> None:
 
 @cli.command(
     short_help="Stop the VM if it is running.",
-    help=(
-        "Log out the guest GUI session when possible, then stop the VM. Safe to run repeatedly."
-    ),
+    help="Stop the VM if it is running. Safe to run repeatedly.",
     epilog=_examples_epilog(
         "talonbox stop",
-        "talonbox --vm talon-test stop",
+        "talonbox --vm talonbox-live stop",
     ),
 )
 @pass_settings
 def stop(settings: CliSettings) -> None:
-    VmController(settings.vm, settings.debug).stop()
+    VmController(settings.vm, settings.debug, settings.golden_vm).stop()
 
 
 @cli.command(
@@ -225,12 +238,12 @@ def smoke_test(settings: CliSettings, yes: bool) -> None:
     ),
     epilog=_examples_epilog(
         "talonbox show",
-        "talonbox --vm talon-test show",
+        "talonbox --vm talonbox-live show",
     ),
 )
 @pass_settings
 def show(settings: CliSettings) -> None:
-    vm_controller = VmController(settings.vm, settings.debug)
+    vm_controller = VmController(settings.vm, settings.debug, settings.golden_vm)
     _echo_vm_info(vm_controller, vm_controller.get_vm())
 
 
@@ -254,7 +267,7 @@ def exec_command(settings: CliSettings, command: tuple[str, ...]) -> None:
     if not command:
         raise click.ClickException("No command provided")
     result = (
-        VmController(settings.vm, settings.debug)
+        VmController(settings.vm, settings.debug, settings.golden_vm)
         .get_running_vm()
         .run_shell(
             command[0] if len(command) == 1 else list(command),
@@ -285,7 +298,9 @@ def exec_command(settings: CliSettings, command: tuple[str, ...]) -> None:
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
 @pass_settings
 def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
-    running_vm = VmController(settings.vm, settings.debug).get_running_vm()
+    running_vm = VmController(
+        settings.vm, settings.debug, settings.golden_vm
+    ).get_running_vm()
     returncode = TransferService(running_vm).rsync(args)
     if returncode:
         raise click.exceptions.Exit(returncode)
@@ -310,7 +325,9 @@ def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="SCP_ARGS...")
 @pass_settings
 def scp(settings: CliSettings, args: tuple[str, ...]) -> None:
-    running_vm = VmController(settings.vm, settings.debug).get_running_vm()
+    running_vm = VmController(
+        settings.vm, settings.debug, settings.golden_vm
+    ).get_running_vm()
     returncode = TransferService(running_vm).scp(args)
     if returncode:
         raise click.exceptions.Exit(returncode)
@@ -363,7 +380,7 @@ def mimic(settings: CliSettings, command: str) -> None:
     ),
     epilog=_examples_epilog(
         "talonbox screenshot /tmp/talon.png",
-        "talonbox --vm talon-test screenshot /tmp/guest-screen.png",
+        "talonbox --vm talonbox-live screenshot /tmp/guest-screen.png",
     ),
 )
 @click.argument(

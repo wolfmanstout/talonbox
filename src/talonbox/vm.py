@@ -19,6 +19,7 @@ TALON_REPL_TIMEOUT_SECONDS = 30.0
 TALON_POST_RESTART_SETTLE_SECONDS = 3.0
 TRANSIENT_RETRY_DELAY_SECONDS = 1.0
 TRANSIENT_RETRY_ATTEMPTS = 2
+DEFAULT_GOLDEN_VM = "talonbox-golden"
 
 
 class TransportError(RuntimeError):
@@ -186,15 +187,6 @@ class RunningVm:
         self.wait_for_talon_repl(timeout=TALON_REPL_TIMEOUT_SECONDS)
         time.sleep(TALON_POST_RESTART_SETTLE_SECONDS)
 
-    def logout_guest_session(self) -> None:
-        self.run_shell(
-            (
-                "launchctl bootout gui/$(id -u) >/dev/null 2>&1 || true; "
-                "while pgrep -x Talon >/dev/null 2>&1; do sleep 1; done"
-            ),
-            timeout=15.0,
-        )
-
     def _ssh_command_prefix(self) -> list[str]:
         return [
             "sshpass",
@@ -266,22 +258,28 @@ class RunningVm:
 
 
 class VmController:
-    def __init__(self, vm: str, debug: bool) -> None:
+    def __init__(
+        self, vm: str, debug: bool, golden_vm: str = DEFAULT_GOLDEN_VM
+    ) -> None:
         self.vm = vm
         self.debug = debug
+        self.golden_vm = golden_vm
 
     def debug_log(self, message: str) -> None:
         if self.debug:
             click.echo(message, err=True)
 
     def get_vm(self) -> lume.VmInfo:
-        try:
-            info = lume.get_vm_info(self.vm, debug=self.debug)
-        except lume.LumeError as error:
-            raise click.ClickException(str(error)) from None
+        info = self._get_vm_info(self.vm)
         if info is None:
             raise click.ClickException(f"VM not found: {self.vm}")
         return info
+
+    def _get_vm_info(self, name: str) -> lume.VmInfo | None:
+        try:
+            return lume.get_vm_info(name, debug=self.debug)
+        except lume.LumeError as error:
+            raise click.ClickException(str(error)) from None
 
     def get_running_vm(self) -> RunningVm:
         info = self.get_vm()
@@ -301,10 +299,13 @@ class VmController:
                 lines.append(f"vnc: {info.vnc_url}")
         return lines
 
-    def start(self) -> RunningVm:
-        info = self.get_vm()
-        if info.status == "running":
-            raise click.ClickException(f"VM is already running: {self.vm}")
+    def start(self, *, resume: bool = False) -> RunningVm:
+        if self.vm == self.golden_vm:
+            raise click.ClickException(
+                f"Target VM and golden VM must be different: {self.vm}"
+            )
+
+        info = self._prepare_start_vm(resume=resume)
         if info.status != "stopped":
             raise click.ClickException(f"VM is not stopped: {self.vm} ({info.status})")
 
@@ -328,6 +329,37 @@ class VmController:
         lume.cleanup_launch_log(launch.log_path)
         return running_vm
 
+    def _prepare_start_vm(self, *, resume: bool) -> lume.VmInfo:
+        if resume:
+            return self.get_vm()
+
+        golden_info = self._get_vm_info(self.golden_vm)
+        if golden_info is None:
+            raise click.ClickException(f"Golden VM not found: {self.golden_vm}")
+
+        target_info = self._get_vm_info(self.vm)
+        if target_info is not None:
+            if target_info.status == "running":
+                raise click.ClickException(f"VM is already running: {self.vm}")
+            if target_info.status != "stopped":
+                raise click.ClickException(
+                    f"VM is not stopped: {self.vm} ({target_info.status})"
+                )
+            try:
+                lume.delete_vm(self.vm, debug=self.debug)
+            except lume.LumeError as error:
+                raise click.ClickException(str(error)) from None
+
+        try:
+            lume.clone_vm(self.golden_vm, self.vm, debug=self.debug)
+        except lume.LumeError as error:
+            raise click.ClickException(str(error)) from None
+
+        info = self._get_vm_info(self.vm)
+        if info is None:
+            raise click.ClickException(f"VM not found after clone: {self.vm}")
+        return info
+
     def restart_talon(
         self,
         *,
@@ -344,11 +376,6 @@ class VmController:
         if info.status == "stopped":
             return
 
-        if info.status == "running" and info.ip_address:
-            try:
-                self._running_vm_from_info(info).logout_guest_session()
-            except (RemoteCommandError, TransportError) as error:
-                self.debug_log(f"guest logout failed: {error}")
         try:
             lume.stop_vm(self.vm, debug=self.debug)
             lume.wait_for_status(self.vm, "stopped", timeout=60.0, debug=self.debug)

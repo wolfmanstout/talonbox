@@ -44,6 +44,12 @@ talonbox screenshot /tmp/talon.png
 talonbox stop
 ```
 
+By default, `talonbox start` deletes any stopped `talonbox-live` VM, clones a
+fresh `talonbox-live` from `talonbox-golden`, then boots that live VM. Use
+`--vm` to choose a different live target, `--golden-vm` to choose a different
+golden source, or `talonbox start --resume` to boot an existing live target
+without cloning.
+
 For a first-pass diagnostic when the setup seems broken, run:
 
 ```bash
