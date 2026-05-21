@@ -95,13 +95,15 @@ def _build_smoke_test_runner(settings: CliSettings) -> SmokeTestRunner:
     context_settings={"max_content_width": 100},
     help=(
         "Minimal Talon VM control primitives for coding agents.\n\n"
-        "Use `start` to boot the VM and reset Talon to a clean state. Use `exec` and `rsync` "
-        "for general guest access. Use `repl`, `mimic`, and `screenshot` for predictable "
+        "Use `start` to clone the golden VM and boot a clean target VM. Use `start --resume` "
+        "to boot the existing target VM and preserve guest changes. Use `exec` and `rsync` for "
+        "general guest access. Use `repl`, `mimic`, and `screenshot` for predictable "
         "Talon-native operations. Use `show` for a read-only status check; it does not modify "
         "the VM."
     ),
     epilog=_examples_epilog(
         "talonbox start",
+        "talonbox start --resume  # preserve installed apps and other guest mutations",
         "talonbox smoke-test",
         "talonbox restart-talon",
         "talonbox exec -- uname -a",
@@ -141,7 +143,7 @@ def setup() -> None:
 
 
 @cli.command(
-    short_help="Clone the golden VM, boot the target VM, and restart Talon.",
+    short_help="Clone golden by default; use --resume to preserve target VM disk.",
     help=(
         "Clone the golden VM to the target VM by default, start the target VM in the "
         "background, wait for SSH, clear the guest Talon user directory, and relaunch "
@@ -233,6 +235,8 @@ def smoke_test(settings: CliSettings, yes: bool) -> None:
     help=(
         "Show whether the VM is running. When it is running, also print IP, SSH credentials, "
         "and the VNC link.\n\n"
+        "If stopped, use `start --resume` to preserve an existing target VM, or `start` to "
+        "replace it from the golden VM.\n\n"
         "This command is read-only: it does not start, stop, or modify the VM, and is safe to "
         "use in sandboxed environments that permit running `lume ls`."
     ),

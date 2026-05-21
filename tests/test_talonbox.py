@@ -74,11 +74,19 @@ def test_root_help_groups_commands_and_examples() -> None:
     runner = CliRunner()
 
     result = runner.invoke(cli, ["--help"])
+    output_words = " ".join(
+        result.output.replace("-\n  ", "-").replace("-\n", "-").split()
+    )
 
     assert result.exit_code == 0
     assert "Minimal Talon VM control primitives for coding agents." in result.output
-    assert "Use `show` for a read-only status check" in result.output
+    assert "Use `start --resume` to boot the existing target VM" in output_words
+    assert "Use `show` for a read-only status check" in output_words
     assert "VM lifecycle:" in result.output
+    assert (
+        "start Clone golden by default; use --resume to preserve target VM disk."
+        in output_words
+    )
     assert "Guest shell:" in result.output
     assert "Talon RPC:" in result.output
     assert "scp" in result.output
@@ -86,6 +94,10 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "smoke-test" in result.output
     assert "talonbox exec -- uname -a" in result.output
     assert "talonbox smoke-test" in result.output
+    assert (
+        "talonbox start --resume  # preserve installed apps and other guest mutations"
+        in result.output
+    )
 
 
 def test_exec_help_explains_double_dash_usage() -> None:
@@ -96,6 +108,17 @@ def test_exec_help_explains_double_dash_usage() -> None:
     assert result.exit_code == 0
     assert "Place `--` before the remote command" in result.output
     assert "talonbox exec -- whoami" in result.output
+
+
+def test_show_help_explains_resume_vs_clean_start() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["show", "--help"])
+    output_words = " ".join(result.output.split())
+
+    assert result.exit_code == 0
+    assert "use `start --resume` to preserve an existing target VM" in output_words
+    assert "`start` to replace it from the golden VM" in output_words
 
 
 def test_mimic_help_works() -> None:
