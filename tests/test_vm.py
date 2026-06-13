@@ -9,11 +9,42 @@ import pytest
 from talonbox import lume as lume_module
 from talonbox import vm as vm_module
 from talonbox.lume import VmInfo
+from talonbox.names import to_lume_vm_name, to_public_vm_name
 from talonbox.vm import VmController
 from tests.helpers import fake_launch, running_vm_fixture, set_vm_statuses
 
 
-def test_vm_controller_format_vm_info_includes_vnc() -> None:
+def test_name_helpers_prefix_and_strip_lume_names() -> None:
+    assert to_lume_vm_name("experiment") == "talonbox-experiment"
+    assert to_public_vm_name("talonbox-experiment") == "experiment"
+    assert to_public_vm_name("other") is None
+
+
+def test_vm_controller_rejects_prefixed_public_name() -> None:
+    with pytest.raises(click.ClickException, match="unprefixed"):
+        VmController("talonbox-experiment", False)
+
+
+def test_vm_controller_list_filters_and_strips_talonbox_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        vm_module.lume,
+        "list_vms",
+        lambda debug=False: [
+            VmInfo("not-talonbox", "stopped", None),
+            VmInfo("talonbox-golden", "stopped", None),
+            VmInfo("talonbox-experiment", "running", "192.168.64.10"),
+        ],
+    )
+
+    assert VmController.list_vms() == [
+        VmInfo("golden", "stopped", None),
+        VmInfo("experiment", "running", "192.168.64.10"),
+    ]
+
+
+def test_vm_controller_format_vm_info_includes_name_and_vnc() -> None:
     vm_controller = VmController("talon-test", False)
 
     lines = vm_controller.format_vm_info(
@@ -21,6 +52,7 @@ def test_vm_controller_format_vm_info_includes_vnc() -> None:
     )
 
     assert lines == [
+        "name: talon-test",
         "status: running",
         "ip: 192.168.64.10",
         "username: lume",
@@ -29,32 +61,113 @@ def test_vm_controller_format_vm_info_includes_vnc() -> None:
     ]
 
 
-def test_vm_controller_start_boots_vm_and_restarts_talon(
+def test_vm_controller_clone_requires_stopped_source_and_empty_dest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    vm_controller = VmController("talonbox-live", False, "talonbox-golden")
+    vm_controller = VmController("golden", False)
     calls: list[tuple[str, object]] = []
-    probe_calls: list[float] = []
-    restart_calls: list[tuple[bool, bool]] = []
-    running_vm = running_vm_fixture()
 
     def fake_get_vm_info(vm: str, debug: bool = False) -> VmInfo | None:
         del debug
         calls.append(("get_vm_info", vm))
-        return VmInfo(vm, "stopped", None)
+        if vm == "talonbox-golden":
+            return VmInfo(vm, "stopped", None)
+        return None
 
     monkeypatch.setattr(vm_module.lume, "get_vm_info", fake_get_vm_info)
-    monkeypatch.setattr(
-        vm_module.lume,
-        "delete_vm",
-        lambda vm, debug=False: calls.append(("delete_vm", vm)),
-    )
     monkeypatch.setattr(
         vm_module.lume,
         "clone_vm",
         lambda source, target, debug=False: calls.append(
             ("clone_vm", (source, target))
         ),
+    )
+
+    vm_controller.clone("experiment")
+
+    assert calls == [
+        ("get_vm_info", "talonbox-golden"),
+        ("get_vm_info", "talonbox-experiment"),
+        ("clone_vm", ("talonbox-golden", "talonbox-experiment")),
+    ]
+
+
+def test_vm_controller_clone_rejects_running_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("golden", False)
+    monkeypatch.setattr(
+        vm_module.lume,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
+    )
+
+    with pytest.raises(click.ClickException, match="must be stopped"):
+        vm_controller.clone("experiment")
+
+
+@pytest.mark.parametrize("status", ["running", "stopping"])
+def test_vm_controller_delete_refuses_non_stopped_vm(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    delete_calls: list[str] = []
+    monkeypatch.setattr(
+        vm_module.lume,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(
+            vm,
+            status,
+            "192.168.64.10" if status == "running" else None,
+        ),
+    )
+    monkeypatch.setattr(
+        vm_module.lume,
+        "delete_vm",
+        lambda vm, debug=False: delete_calls.append(vm),
+    )
+
+    with pytest.raises(click.ClickException, match="must be stopped"):
+        vm_controller.delete()
+    assert delete_calls == []
+
+
+def test_vm_controller_delete_uses_prefixed_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        vm_module.lume,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "stopped", None),
+    )
+    monkeypatch.setattr(
+        vm_module.lume,
+        "delete_vm",
+        lambda vm, debug=False: calls.append(vm),
+    )
+
+    vm_controller.delete()
+
+    assert calls == ["talonbox-experiment"]
+
+
+def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    calls: list[tuple[str, object]] = []
+    probe_calls: list[float] = []
+    ensure_calls: list[str] = []
+    running_vm = running_vm_fixture()
+
+    monkeypatch.setattr(
+        vm_module.lume,
+        "get_vm_info",
+        lambda vm, debug=False: calls.append(("get_vm_info", vm))
+        or VmInfo(vm, "stopped", None),
     )
     monkeypatch.setattr(
         vm_module.lume,
@@ -66,13 +179,10 @@ def test_vm_controller_start_boots_vm_and_restarts_talon(
         "wait_for_running_vm",
         lambda vm, timeout, debug=False, launch=None: calls.append(
             ("wait_for_running_vm", vm)
-        ),
+        )
+        or VmInfo(vm, "running", "192.168.64.10"),
     )
-    monkeypatch.setattr(
-        vm_controller,
-        "_running_vm_from_info",
-        lambda info: running_vm,
-    )
+    monkeypatch.setattr(vm_controller, "_running_vm_from_info", lambda info: running_vm)
     monkeypatch.setattr(
         running_vm,
         "probe_ssh",
@@ -80,119 +190,44 @@ def test_vm_controller_start_boots_vm_and_restarts_talon(
     )
     monkeypatch.setattr(
         running_vm,
-        "restart_talon",
-        lambda *, wipe_user_dir, clean_logs: restart_calls.append(
-            (wipe_user_dir, clean_logs)
-        ),
+        "ensure_talon_running",
+        lambda: ensure_calls.append("ensure_talon_running"),
     )
-    monkeypatch.setattr(
-        vm_module.lume,
-        "cleanup_launch_log",
-        lambda log_path: None,
-    )
+    monkeypatch.setattr(vm_module.lume, "cleanup_launch_log", lambda log_path: None)
 
-    info = vm_controller.start()
-
-    assert info is running_vm
+    assert vm_controller.start() is running_vm
     assert calls == [
-        ("get_vm_info", "talonbox-golden"),
-        ("get_vm_info", "talonbox-live"),
-        ("delete_vm", "talonbox-live"),
-        ("clone_vm", ("talonbox-golden", "talonbox-live")),
-        ("get_vm_info", "talonbox-live"),
-        ("spawn_vm", "talonbox-live"),
-        ("wait_for_running_vm", "talonbox-live"),
+        ("get_vm_info", "talonbox-experiment"),
+        ("spawn_vm", "talonbox-experiment"),
+        ("wait_for_running_vm", "talonbox-experiment"),
     ]
     assert probe_calls == [vm_module.SSH_TIMEOUT_SECONDS]
-    assert restart_calls == [(True, True)]
+    assert ensure_calls == ["ensure_talon_running"]
 
 
-def test_vm_controller_start_refuses_running_target_before_clone(
+def test_vm_controller_start_reuses_running_vm_without_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    vm_controller = VmController("talonbox-live", False, "talonbox-golden")
-    calls: list[tuple[str, object]] = []
-
-    def fake_get_vm_info(vm: str, debug: bool = False) -> VmInfo | None:
-        del debug
-        calls.append(("get_vm_info", vm))
-        status = "running" if vm == "talonbox-live" else "stopped"
-        return VmInfo(vm, status, "192.168.64.10" if status == "running" else None)
-
-    monkeypatch.setattr(vm_module.lume, "get_vm_info", fake_get_vm_info)
-    monkeypatch.setattr(
-        vm_module.lume,
-        "delete_vm",
-        lambda vm, debug=False: calls.append(("delete_vm", vm)),
-    )
-    monkeypatch.setattr(
-        vm_module.lume,
-        "clone_vm",
-        lambda source, target, debug=False: calls.append(
-            ("clone_vm", (source, target))
-        ),
-    )
-
-    with pytest.raises(click.ClickException, match="VM is already running"):
-        vm_controller.start()
-
-    assert calls == [
-        ("get_vm_info", "talonbox-golden"),
-        ("get_vm_info", "talonbox-live"),
-    ]
-
-
-def test_vm_controller_start_resume_skips_clone_and_delete(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    vm_controller = VmController("talonbox-live", False, "talonbox-golden")
-    calls: list[tuple[str, object]] = []
+    vm_controller = VmController("experiment", False)
     running_vm = running_vm_fixture()
+    spawn_calls: list[str] = []
 
     monkeypatch.setattr(
         vm_module.lume,
         "get_vm_info",
-        lambda vm, debug=False: calls.append(("get_vm_info", vm))
-        or VmInfo(vm, "stopped", None),
-    )
-    monkeypatch.setattr(
-        vm_module.lume,
-        "delete_vm",
-        lambda vm, debug=False: calls.append(("delete_vm", vm)),
-    )
-    monkeypatch.setattr(
-        vm_module.lume,
-        "clone_vm",
-        lambda source, target, debug=False: calls.append(
-            ("clone_vm", (source, target))
-        ),
+        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
     )
     monkeypatch.setattr(
         vm_module.lume,
         "spawn_vm",
-        lambda vm, debug=False: calls.append(("spawn_vm", vm)) or fake_launch(),
-    )
-    monkeypatch.setattr(
-        vm_module.lume,
-        "wait_for_running_vm",
-        lambda vm, timeout, debug=False, launch=None: VmInfo(
-            vm, "running", "192.168.64.10"
-        ),
+        lambda vm, debug=False: spawn_calls.append(vm) or fake_launch(),
     )
     monkeypatch.setattr(vm_controller, "_running_vm_from_info", lambda info: running_vm)
     monkeypatch.setattr(running_vm, "probe_ssh", lambda *, timeout=0: None)
-    monkeypatch.setattr(
-        running_vm,
-        "restart_talon",
-        lambda *, wipe_user_dir, clean_logs: None,
-    )
-    monkeypatch.setattr(vm_module.lume, "cleanup_launch_log", lambda log_path: None)
+    monkeypatch.setattr(running_vm, "ensure_talon_running", lambda: None)
 
-    assert vm_controller.start(resume=True) is running_vm
-    assert calls == [
-        ("get_vm_info", "talonbox-live"),
-        ("spawn_vm", "talonbox-live"),
-    ]
+    assert vm_controller.start() is running_vm
+    assert spawn_calls == []
 
 
 def test_vm_controller_start_cleans_up_failed_launch(
@@ -215,12 +250,7 @@ def test_vm_controller_start_cleans_up_failed_launch(
             vm, "running", "192.168.64.10"
         ),
     )
-
-    monkeypatch.setattr(
-        vm_controller,
-        "_running_vm_from_info",
-        lambda info: running_vm,
-    )
+    monkeypatch.setattr(vm_controller, "_running_vm_from_info", lambda info: running_vm)
 
     def fail_probe(*, timeout: float = 0.0) -> None:
         del timeout
@@ -241,9 +271,28 @@ def test_vm_controller_start_cleans_up_failed_launch(
     )
 
     with pytest.raises(click.ClickException, match="ssh failed: 192.168.64.10"):
-        vm_controller.start(resume=True)
+        vm_controller.start()
 
-    assert calls == [("stop_vm", "talon-test"), ("wait_for_status", 30.0)]
+    assert calls == [("stop_vm", "talonbox-talon-test"), ("wait_for_status", 30.0)]
+
+
+def test_vm_controller_formats_concurrency_hint_when_two_vms_are_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    monkeypatch.setattr(
+        vm_module.lume,
+        "list_vms",
+        lambda debug=False: [
+            VmInfo("talonbox-one", "running", "192.168.64.10"),
+            VmInfo("talonbox-two", "running", "192.168.64.11"),
+        ],
+    )
+
+    assert vm_controller._format_start_error("lume run exited") == (
+        "lume run exited\n"
+        "HINT macOS Virtualization commonly allows only 2 running VMs; stop another VM and retry."
+    )
 
 
 def test_running_vm_restart_talon_waits_for_repl_and_sleeps(
@@ -278,6 +327,29 @@ def test_running_vm_restart_talon_waits_for_repl_and_sleeps(
     assert sleeps == [vm_module.TALON_POST_RESTART_SETTLE_SECONDS]
 
 
+def test_running_vm_ensure_talon_running_skips_launch_when_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running_vm = running_vm_fixture()
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        running_vm,
+        "run_shell",
+        lambda command, **kwargs: calls.append(command)
+        or subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        running_vm,
+        "wait_for_talon_repl",
+        lambda **kwargs: calls.append("wait_for_talon_repl"),
+    )
+
+    running_vm.ensure_talon_running()
+
+    assert calls == ["pgrep -x Talon >/dev/null", "wait_for_talon_repl"]
+
+
 def test_vm_controller_stop_falls_back_to_force_stop_for_stuck_vm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -302,7 +374,7 @@ def test_vm_controller_stop_falls_back_to_force_stop_for_stuck_vm(
         calls.append(("wait_for_status", timeout))
         if timeout == 60.0:
             raise lume_module.LumeError(
-                "Timed out waiting for VM to reach status stopped: talon-test"
+                "Timed out waiting for VM to reach status stopped: talonbox-talon-test"
             )
         return VmInfo(vm, "stopped", None)
 
@@ -316,9 +388,9 @@ def test_vm_controller_stop_falls_back_to_force_stop_for_stuck_vm(
     vm_controller.stop()
 
     assert calls == [
-        ("stop_vm", "talon-test"),
+        ("stop_vm", "talonbox-talon-test"),
         ("wait_for_status", 60.0),
-        ("force_stop_vm", "talon-test"),
+        ("force_stop_vm", "talonbox-talon-test"),
         ("wait_for_status", 20.0),
     ]
 

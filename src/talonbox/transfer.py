@@ -9,10 +9,10 @@ from pathlib import Path
 
 import click
 
+from .names import validate_public_vm_name
 from .vm import RunningVm
 
 HOST_OUTPUT_ROOT = Path("/tmp")
-GUEST_PREFIX = "guest:"
 DEVICE_ROOT = Path("/dev")
 RSYNC_VALUE_OPTIONS = {
     "-B",
@@ -59,6 +59,7 @@ class TransferOperand:
     raw: str
     kind: str
     path: str
+    vm: str | None = None
 
 
 class TransferService:
@@ -77,6 +78,22 @@ class TransferService:
         return self._build_transfer_command_args(
             args,
             self.running_vm,
+            value_options=SCP_VALUE_OPTIONS,
+            rejected_options=SCP_REJECTED_OPTIONS,
+        )
+
+    @classmethod
+    def extract_rsync_vm_name(cls, args: Sequence[str]) -> str:
+        return cls._extract_vm_name(
+            args,
+            value_options=RSYNC_VALUE_OPTIONS,
+            rejected_options=RSYNC_REJECTED_OPTIONS,
+        )
+
+    @classmethod
+    def extract_scp_vm_name(cls, args: Sequence[str]) -> str:
+        return cls._extract_vm_name(
+            args,
             value_options=SCP_VALUE_OPTIONS,
             rejected_options=SCP_REJECTED_OPTIONS,
         )
@@ -153,21 +170,36 @@ class TransferService:
         sources = [self._classify_transfer_operand(arg) for arg in positionals[:-1]]
         destination = self._classify_transfer_operand(positionals[-1])
 
+        remote_vms = {
+            operand.vm
+            for operand in [*sources, destination]
+            if operand.kind == "remote"
+        }
+        if not remote_vms:
+            raise click.ClickException(
+                "Transfer requires one VM operand written as NAME:/absolute/path"
+            )
+        if remote_vms != {running_vm.name}:
+            raise click.ClickException(
+                f"Transfer operands name {next(iter(remote_vms))!r}, but connected VM is {running_vm.name!r}"
+            )
+
         source_kinds = {source.kind for source in sources}
         if len(source_kinds) != 1:
-            raise click.ClickException("Mixed local and guest sources are not allowed")
+            raise click.ClickException("Mixed local and VM sources are not allowed")
         source_kind = next(iter(source_kinds))
         if source_kind == destination.kind:
             if source_kind == "local":
                 raise click.ClickException(
-                    "Local-to-local transfers are not allowed; use guest: paths for the VM"
+                    "Local-to-local transfers are not allowed; use NAME:/path for the VM"
                 )
-            raise click.ClickException("Guest-to-guest transfers are not allowed")
+            raise click.ClickException("VM-to-VM transfers are not allowed")
         if destination.kind == "local":
             destination = TransferOperand(
                 raw=destination.raw,
                 kind=destination.kind,
                 path=str(self.normalize_local_output_path(destination.path)),
+                vm=destination.vm,
             )
 
         rewritten = [
@@ -176,8 +208,36 @@ class TransferService:
         ]
         return [*passthrough, *rewritten]
 
+    @classmethod
+    def _extract_vm_name(
+        cls,
+        args: Sequence[str],
+        *,
+        value_options: set[str],
+        rejected_options: set[str],
+    ) -> str:
+        _, positionals = cls._split_transfer_options_and_operands(
+            args,
+            value_options=value_options,
+            rejected_options=rejected_options,
+        )
+        vm_names = {
+            operand.vm
+            for operand in (cls._classify_transfer_operand(arg) for arg in positionals)
+            if operand.kind == "remote"
+        }
+        if not vm_names:
+            raise click.ClickException(
+                "Transfer requires one VM operand written as NAME:/absolute/path"
+            )
+        if len(vm_names) != 1:
+            raise click.ClickException("All VM operands must name the same VM")
+        vm_name = next(iter(vm_names))
+        assert vm_name is not None
+        return vm_name
+
+    @staticmethod
     def _split_transfer_options_and_operands(
-        self,
         args: Sequence[str],
         *,
         value_options: set[str],
@@ -232,18 +292,29 @@ class TransferService:
 
         return passthrough, positionals
 
-    def _classify_transfer_operand(self, raw: str) -> TransferOperand:
-        if raw.startswith(GUEST_PREFIX):
-            path = raw[len(GUEST_PREFIX) :]
+    @staticmethod
+    def _classify_transfer_operand(raw: str) -> TransferOperand:
+        remote_name, separator, path = raw.partition(":")
+        if separator:
+            if remote_name == "guest":
+                raise click.ClickException(
+                    "guest: paths have been replaced by VM-named paths; use NAME:/absolute/path."
+                )
+            if raw.startswith("rsync://"):
+                raise click.ClickException(
+                    f"Only NAME:/path VM operands are allowed: {raw}"
+                )
+            remote_name = validate_public_vm_name(remote_name)
             if not path:
-                raise click.ClickException("Guest path must not be empty: guest:/path")
+                raise click.ClickException(f"VM path must not be empty: {raw}")
             if not path.startswith("/"):
-                raise click.ClickException(f"Guest path must be absolute: {raw}")
-            return TransferOperand(raw=raw, kind="guest", path=path)
-        if raw.startswith("rsync://"):
-            raise click.ClickException(f"Only guest: remote paths are allowed: {raw}")
-        if ":" in raw:
-            raise click.ClickException(f"Only guest: remote paths are allowed: {raw}")
+                raise click.ClickException(f"VM path must be absolute: {raw}")
+            return TransferOperand(
+                raw=raw,
+                kind="remote",
+                path=path,
+                vm=remote_name,
+            )
         return TransferOperand(raw=raw, kind="local", path=raw)
 
     def _rewrite_transfer_operand(

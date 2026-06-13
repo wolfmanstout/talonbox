@@ -59,7 +59,7 @@ def _run_lume(
     return result
 
 
-def get_vm_info(name: str, *, debug: bool = False) -> VmInfo | None:
+def list_vms(*, debug: bool = False) -> list[VmInfo]:
     result = _run_lume(["ls", "--format", "json"], debug=debug)
     try:
         records = _parse_lume_json(result.stdout)
@@ -68,14 +68,21 @@ def get_vm_info(name: str, *, debug: bool = False) -> VmInfo | None:
         raise LumeError(
             f"Invalid JSON from `lume ls --format json`: {raw_output}"
         ) from error
-    for record in records:
-        if record.get("name") == name:
-            return VmInfo(
-                name=name,
-                status=record.get("status", "unknown"),
-                ip_address=record.get("ipAddress"),
-                vnc_url=record.get("vncUrl"),
-            )
+    return [
+        VmInfo(
+            name=str(record.get("name", "")),
+            status=record.get("status", "unknown"),
+            ip_address=record.get("ipAddress"),
+            vnc_url=record.get("vncUrl"),
+        )
+        for record in records
+    ]
+
+
+def get_vm_info(name: str, *, debug: bool = False) -> VmInfo | None:
+    for info in list_vms(debug=debug):
+        if info.name == name:
+            return info
     return None
 
 

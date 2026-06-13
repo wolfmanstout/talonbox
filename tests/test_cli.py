@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 
-import click
 import pytest
 from click.testing import CliRunner
 
@@ -26,30 +25,35 @@ def test_root_help_groups_commands_and_examples() -> None:
     runner = CliRunner()
 
     result = runner.invoke(cli, ["--help"])
-    output_words = " ".join(
-        result.output.replace("-\n  ", "-").replace("-\n", "-").split()
-    )
+    output_words = " ".join(result.output.split())
 
     assert result.exit_code == 0
     assert "Minimal Talon VM control primitives for coding agents." in result.output
-    assert "Use `start --resume` to boot the existing target VM" in output_words
-    assert "Use `show` for a read-only status check" in output_words
+    assert "Use named macOS VMs as disposable Talon sandboxes" in result.output
+    assert "VM paths use `NAME:/absolute/path`" in result.output
+    assert "temporary clone so the source VM stays clean" in output_words
     assert "VM lifecycle:" in result.output
-    assert (
-        "start Clone golden by default; use --resume to preserve target VM disk."
-        in output_words
-    )
+    assert "clone" in result.output
+    assert "delete" in result.output
+    assert "list" in result.output
+    assert "status" in result.output
     assert "Guest shell:" in result.output
     assert "Talon RPC:" in result.output
-    assert "scp" in result.output
-    assert "restart-talon" in result.output
-    assert "smoke-test" in result.output
-    assert "talonbox exec -- uname -a" in result.output
-    assert "talonbox smoke-test" in result.output
+    assert "talonbox clone golden experiment" in result.output
     assert (
-        "talonbox start --resume  # preserve installed apps and other guest mutations"
+        "talonbox rsync -av ~/.talon/user/ experiment:/Users/lume/.talon/user/"
         in result.output
     )
+
+
+def test_clone_help_documents_apfs_clone() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["clone", "--help"])
+
+    assert result.exit_code == 0
+    assert "APFS copy-on-write cloning" in result.output
+    assert "talonbox clone golden experiment" in result.output
 
 
 def test_exec_help_explains_double_dash_usage() -> None:
@@ -59,18 +63,7 @@ def test_exec_help_explains_double_dash_usage() -> None:
 
     assert result.exit_code == 0
     assert "Place `--` before the remote command" in result.output
-    assert "talonbox exec -- whoami" in result.output
-
-
-def test_show_help_explains_resume_vs_clean_start() -> None:
-    runner = CliRunner()
-
-    result = runner.invoke(cli, ["show", "--help"])
-    output_words = " ".join(result.output.split())
-
-    assert result.exit_code == 0
-    assert "use `start --resume` to preserve an existing target VM" in output_words
-    assert "`start` to replace it from the golden VM" in output_words
+    assert "talonbox exec experiment -- whoami" in result.output
 
 
 def test_mimic_help_works() -> None:
@@ -79,86 +72,63 @@ def test_mimic_help_works() -> None:
     result = runner.invoke(cli, ["mimic", "--help"])
 
     assert result.exit_code == 0
-    assert (
-        "Send one phrase to the guest Talon REPL as `mimic(<phrase>)`." in result.output
-    )
+    assert "Send one phrase to the VM's Talon REPL" in result.output
 
 
-def test_smoke_test_help_mentions_artifacts_and_confirmation() -> None:
+def test_smoke_test_help_mentions_clone_and_artifacts() -> None:
     runner = CliRunner()
 
     result = runner.invoke(cli, ["smoke-test", "--help"])
 
     assert result.exit_code == 0
-    assert "Run a mutating end-to-end sanity check" in result.output
-    assert "may stop a running VM" in result.output
+    assert "temporary clone of SOURCE" in result.output
+    assert "source VM must be stopped" in result.output
     assert "Artifacts are kept under `/tmp`" in result.output
-    assert "left stopped" in result.output
-    assert "talonbox smoke-test --yes" in result.output
 
 
 def test_start_command_delegates_to_vm_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = CliRunner()
-    calls: list[tuple[str, str, bool]] = []
+    calls: list[str] = []
 
-    def fake_start(self: VmController, *, resume: bool = False):
-        calls.append((self.vm, self.golden_vm, resume))
-        return running_vm_fixture()
-
-    monkeypatch.setattr(
-        cli_module.VmController,
-        "start",
-        fake_start,
-    )
-    monkeypatch.setattr(
-        cli_module.VmController,
-        "format_vm_info",
-        lambda self, info: ["status: running", "ip: 192.168.64.10"],
-    )
-
-    result = runner.invoke(cli, ["start"])
-
-    assert result.exit_code == 0
-    assert result.output == "status: running\nip: 192.168.64.10\n"
-    assert calls == [("talonbox-live", "talonbox-golden", False)]
-
-
-def test_start_command_passes_resume_and_vm_names(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-    calls: list[tuple[str, str, bool]] = []
-
-    def fake_start(self: VmController, *, resume: bool = False):
-        calls.append((self.vm, self.golden_vm, resume))
+    def fake_start(self: VmController):
+        calls.append(self.vm)
         return running_vm_fixture()
 
     monkeypatch.setattr(cli_module.VmController, "start", fake_start)
     monkeypatch.setattr(
         cli_module.VmController,
         "format_vm_info",
-        lambda self, info: ["status: running"],
+        lambda self, info: ["name: experiment", "status: running"],
     )
 
-    result = runner.invoke(
-        cli,
-        [
-            "--vm",
-            "target-vm",
-            "--golden-vm",
-            "golden-vm",
-            "start",
-            "--resume",
-        ],
-    )
+    result = runner.invoke(cli, ["start", "experiment"])
 
     assert result.exit_code == 0
-    assert calls == [("target-vm", "golden-vm", True)]
+    assert result.output == "name: experiment\nstatus: running\n"
+    assert calls == ["experiment"]
 
 
-def test_show_command_delegates_to_vm_controller(
+def test_clone_command_delegates_to_vm_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "clone",
+        lambda self, dest: calls.append((self.vm, dest)),
+    )
+
+    result = runner.invoke(cli, ["clone", "golden", "experiment"])
+
+    assert result.exit_code == 0
+    assert calls == [("golden", "experiment")]
+
+
+def test_status_command_delegates_to_vm_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = CliRunner()
@@ -170,34 +140,56 @@ def test_show_command_delegates_to_vm_controller(
     monkeypatch.setattr(
         cli_module.VmController,
         "format_vm_info",
-        lambda self, info: ["status: running", "ip: 192.168.64.10"],
+        lambda self, info: ["name: experiment", "status: running"],
     )
 
-    result = runner.invoke(cli, ["show"])
+    result = runner.invoke(cli, ["status", "experiment"])
 
     assert result.exit_code == 0
-    assert result.output == "status: running\nip: 192.168.64.10\n"
+    assert result.output == "name: experiment\nstatus: running\n"
 
 
-def test_smoke_test_command_passes_yes_to_runner(
+def test_list_command_prints_public_vms(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "list_vms",
+        lambda debug=False: [
+            VmInfo("golden", "stopped", None),
+            VmInfo("experiment", "running", "192.168.64.10", "vnc://127.0.0.1:5901"),
+        ],
+    )
+
+    result = runner.invoke(cli, ["list"])
+
+    assert result.exit_code == 0
+    assert result.output == (
+        "name\tstatus\tip\tvnc\n"
+        "golden\tstopped\t-\t-\n"
+        "experiment\trunning\t192.168.64.10\tvnc://127.0.0.1:5901\n"
+    )
+
+
+def test_smoke_test_command_passes_source_to_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = CliRunner()
-    calls: list[bool] = []
+    calls: list[str] = []
 
     class FakeRunner:
-        def run(self, *, yes: bool, confirm: object = click.confirm) -> None:
-            del confirm
-            calls.append(yes)
+        def run(self) -> None:
+            calls.append("run")
 
-    monkeypatch.setattr(
-        cli_module, "_build_smoke_test_runner", lambda settings: FakeRunner()
-    )
+    def fake_build_runner(settings: object, source: str) -> FakeRunner:
+        calls.append(source)
+        return FakeRunner()
 
-    result = runner.invoke(cli, ["smoke-test", "--yes"])
+    monkeypatch.setattr(cli_module, "_build_smoke_test_runner", fake_build_runner)
+
+    result = runner.invoke(cli, ["smoke-test", "golden"])
 
     assert result.exit_code == 0
-    assert calls == [True]
+    assert calls == ["golden", "run"]
 
 
 def test_cli_rejects_non_macos_before_running_commands(
@@ -215,7 +207,7 @@ def test_cli_rejects_non_macos_before_running_commands(
         or VmInfo(self.vm, "running", "192.168.64.10"),
     )
 
-    result = runner.invoke(cli, ["show"])
+    result = runner.invoke(cli, ["status", "experiment"])
 
     assert result.exit_code == 1
     assert "supports only macOS hosts" in result.output
@@ -224,20 +216,20 @@ def test_cli_rejects_non_macos_before_running_commands(
 
 def test_repl_reads_stdin_when_no_code(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
-    payloads: list[str] = []
+    payloads: list[tuple[str, str]] = []
 
     class FakeClient:
         def repl(self, code: str) -> None:
-            payloads.append(code)
+            payloads.append(("repl", code))
 
     monkeypatch.setattr(
-        cli_module, "_build_talon_client", lambda settings: FakeClient()
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
     )
 
-    result = runner.invoke(cli, ["repl"], input="print(1)\n")
+    result = runner.invoke(cli, ["repl", "experiment"], input="print(1)\n")
 
     assert result.exit_code == 0
-    assert payloads == ["print(1)\n"]
+    assert payloads == [("repl", "print(1)\n")]
 
 
 def test_exec_command_runs_guest_shell_and_propagates_exit_code(
@@ -263,7 +255,7 @@ def test_exec_command_runs_guest_shell_and_propagates_exit_code(
 
     monkeypatch.setattr(running_vm, "run_shell", fake_exec)
 
-    result = runner.invoke(cli, ["exec", "--", "echo", "hi"])
+    result = runner.invoke(cli, ["exec", "experiment", "--", "echo", "hi"])
 
     assert result.exit_code == 7
     assert calls == [("192.168.64.10", ["echo", "hi"])]

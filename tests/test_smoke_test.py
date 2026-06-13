@@ -68,7 +68,7 @@ def test_verify_smoke_test_screenshots_differ_rejects_identical_files(
         runner.verify_screenshots_differ(before, after)
 
 
-def test_smoke_test_runner_cancellation_leaves_running_vm_untouched(
+def test_smoke_test_runner_rejects_running_source_without_mutating_it(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -85,14 +85,18 @@ def test_smoke_test_runner_cancellation_leaves_running_vm_untouched(
         "stop",
         lambda: pytest.fail("stop should not be called"),
     )
+    monkeypatch.setattr(
+        vm_controller,
+        "clone",
+        lambda dest: pytest.fail("clone should not be called"),
+    )
 
     with pytest.raises(click.exceptions.Exit) as error:
-        runner.run(yes=False, confirm=lambda prompt, default=False: False)
+        runner.run()
 
     captured = capsys.readouterr()
     assert error.value.exit_code == 1
-    assert "VM talon-test is already running." in captured.out
-    assert "FAIL smoke-test canceled by user; VM left running." in captured.out
+    assert "Source VM must be stopped before smoke-test" in captured.out
 
 
 def test_smoke_test_runner_success_runs_end_to_end(
@@ -112,10 +116,22 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "get_vm",
         lambda: states[0],
     )
+    temp_controller = vm_controller.for_vm("temp")
     monkeypatch.setattr(
         vm_controller,
+        "for_vm",
+        lambda name: steps.append(f"for_vm:{name.startswith('smoke-test-')}")
+        or temp_controller,
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "clone",
+        lambda dest: steps.append(f"clone:{dest.startswith('smoke-test-')}"),
+    )
+    monkeypatch.setattr(
+        temp_controller,
         "start",
-        lambda *, resume=False: steps.append(f"start:{resume}") or running_vm,
+        lambda: steps.append("start") or running_vm,
     )
     monkeypatch.setattr(
         runner,
@@ -128,7 +144,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
         lambda args: steps.append("rsync") or 0,
     )
     monkeypatch.setattr(
-        vm_controller,
+        temp_controller,
         "restart_talon",
         lambda *, wipe_user_dir, clean_logs: steps.append(
             f"restart:{wipe_user_dir}:{clean_logs}"
@@ -164,18 +180,25 @@ def test_smoke_test_runner_success_runs_end_to_end(
         lambda before, after: steps.append("verify_diff"),
     )
     monkeypatch.setattr(
-        vm_controller,
+        temp_controller,
         "stop",
         lambda: steps.append("stop"),
     )
+    monkeypatch.setattr(
+        temp_controller,
+        "delete",
+        lambda: steps.append("delete"),
+    )
 
-    runner.run(yes=False)
+    runner.run()
 
     captured = capsys.readouterr()
     assert "ARTIFACT " in captured.out
     assert "PASS Smoke test completed successfully." in captured.out
     assert steps == [
-        "start:False",
+        "for_vm:True",
+        "clone:True",
+        "start",
         "rsync",
         "restart:False:True",
         "mimic:talonbox smoke test",
@@ -185,6 +208,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "capture:screenshot-after-dialog.png",
         "verify_diff",
         "stop",
+        "delete",
     ]
     artifact_dir = next(tmp_path.iterdir())
     assert (artifact_dir / "bundle" / "talonbox_smoke_test.talon").exists()
@@ -205,10 +229,13 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
         "get_vm",
         lambda: VmInfo("talon-test", "stopped", None),
     )
+    temp_controller = vm_controller.for_vm("temp")
+    monkeypatch.setattr(vm_controller, "for_vm", lambda name: temp_controller)
+    monkeypatch.setattr(vm_controller, "clone", lambda dest: None)
     monkeypatch.setattr(
-        vm_controller,
+        temp_controller,
         "start",
-        lambda *, resume=False: running_vm_fixture(),
+        lambda: running_vm_fixture(),
     )
     monkeypatch.setattr(
         runner,
@@ -217,16 +244,17 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
     )
     monkeypatch.setattr(transfer_service, "rsync", lambda args: 0)
     monkeypatch.setattr(
-        vm_controller,
+        temp_controller,
         "restart_talon",
         lambda *, wipe_user_dir, clean_logs: (_ for _ in ()).throw(
             click.ClickException("talon restart failed")
         ),
     )
-    monkeypatch.setattr(vm_controller, "stop", lambda: stop_calls.append("stop"))
+    monkeypatch.setattr(temp_controller, "stop", lambda: stop_calls.append("stop"))
+    monkeypatch.setattr(temp_controller, "delete", lambda: stop_calls.append("delete"))
 
     with pytest.raises(click.exceptions.Exit) as error:
-        runner.run(yes=False)
+        runner.run()
 
     captured = capsys.readouterr()
     assert error.value.exit_code == 1
@@ -238,7 +266,7 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
         "HINT inspect guest logs at ~/.talon/talon.log and /tmp/talonbox-talon.log."
         in captured.out
     )
-    assert stop_calls == ["stop"]
+    assert stop_calls == ["stop", "delete"]
 
 
 def test_smoke_test_runner_rejects_invalid_screenshot(
@@ -257,10 +285,13 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
         "get_vm",
         lambda: VmInfo("talon-test", "stopped", None),
     )
+    temp_controller = vm_controller.for_vm("temp")
+    monkeypatch.setattr(vm_controller, "for_vm", lambda name: temp_controller)
+    monkeypatch.setattr(vm_controller, "clone", lambda dest: None)
     monkeypatch.setattr(
-        vm_controller,
+        temp_controller,
         "start",
-        lambda *, resume=False: running_vm,
+        lambda: running_vm,
     )
     monkeypatch.setattr(
         runner,
@@ -269,7 +300,7 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
     )
     monkeypatch.setattr(transfer_service, "rsync", lambda args: 0)
     monkeypatch.setattr(
-        vm_controller,
+        temp_controller,
         "restart_talon",
         lambda *, wipe_user_dir, clean_logs: None,
     )
@@ -289,10 +320,11 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
     monkeypatch.setattr(
         runner, "verify_marker", lambda running_vm_arg, marker_path, token: None
     )
-    monkeypatch.setattr(vm_controller, "stop", lambda: stop_calls.append("stop"))
+    monkeypatch.setattr(temp_controller, "stop", lambda: stop_calls.append("stop"))
+    monkeypatch.setattr(temp_controller, "delete", lambda: stop_calls.append("delete"))
 
     with pytest.raises(click.exceptions.Exit) as error:
-        runner.run(yes=False)
+        runner.run()
 
     captured = capsys.readouterr()
     assert error.value.exit_code == 1
@@ -301,4 +333,4 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
         in captured.out
     )
     assert "HINT inspect the saved screenshot at" in captured.out
-    assert stop_calls == ["stop"]
+    assert stop_calls == ["stop", "delete"]

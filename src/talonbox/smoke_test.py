@@ -26,9 +26,6 @@ class SmokeTestRunner:
 
     def run(
         self,
-        *,
-        yes: bool,
-        confirm: Callable[..., bool] = click.confirm,
     ) -> None:
         artifact_dir = self.host_output_root / f"talonbox-smoke-test-{uuid.uuid4().hex}"
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -38,6 +35,9 @@ class SmokeTestRunner:
         marker_path = f"/tmp/talonbox-smoke-test-marker-{uuid.uuid4().hex}.txt"
         token = uuid.uuid4().hex
         started = False
+        cloned = False
+        temp_vm_name = f"smoke-test-{uuid.uuid4().hex}"
+        temp_vm_controller = self.vm_controller.for_vm(temp_vm_name)
 
         def hint_screenshot() -> Path | None:
             if screenshot_path.exists():
@@ -51,35 +51,27 @@ class SmokeTestRunner:
 
         try:
             info = self.run_step(
-                "Inspect VM status",
+                "Inspect source VM status",
                 self.vm_controller.get_vm,
-                success_message="VM status checked.",
+                success_message="Source VM status checked.",
             )
             assert isinstance(info, lume.VmInfo)
-            if info.status not in {"running", "stopped"}:
+            if info.status != "stopped":
                 raise click.ClickException(
-                    f"VM is not ready for smoke-test: {self.vm_controller.vm} ({info.status})"
+                    f"Source VM must be stopped before smoke-test: {self.vm_controller.vm} ({info.status})"
                 )
 
-            if info.status == "running":
-                message = (
-                    f"VM {self.vm_controller.vm} is already running. smoke-test must stop "
-                    "and restart it before continuing."
-                )
-                click.echo(message)
-                if not yes and not confirm("Continue with smoke-test?", default=False):
-                    self.log("FAIL", "smoke-test canceled by user; VM left running.")
-                    raise click.exceptions.Exit(1)
-                self.run_step(
-                    "Stop the running VM before smoke-test",
-                    self.vm_controller.stop,
-                    success_message="Running VM stopped.",
-                )
+            self.run_step(
+                "Clone the source VM for smoke-test",
+                lambda: self.vm_controller.clone(temp_vm_name),
+                success_message=f"Temporary VM cloned: {temp_vm_name}",
+            )
+            cloned = True
 
             running_vm = self.run_step(
-                "Start the VM and reset Talon",
-                self.vm_controller.start,
-                success_message="VM started and Talon reset.",
+                "Start the smoke-test VM",
+                temp_vm_controller.start,
+                success_message="Smoke-test VM started.",
             )
             assert isinstance(running_vm, RunningVm)
             started = True
@@ -98,7 +90,7 @@ class SmokeTestRunner:
             )
             self.run_step(
                 "Restart Talon to load the uploaded bundle",
-                lambda: self.vm_controller.restart_talon(
+                lambda: temp_vm_controller.restart_talon(
                     wipe_user_dir=False,
                     clean_logs=True,
                 ),
@@ -154,9 +146,15 @@ class SmokeTestRunner:
             self._hint_screenshot = None
             if started:
                 self.run_step(
-                    "Stop the VM after smoke-test",
-                    self.vm_controller.stop,
-                    success_message="VM stopped after smoke-test.",
+                    "Stop the smoke-test VM",
+                    temp_vm_controller.stop,
+                    success_message="Smoke-test VM stopped.",
+                )
+            if cloned:
+                self.run_step(
+                    "Delete the smoke-test VM",
+                    temp_vm_controller.delete,
+                    success_message="Smoke-test VM deleted.",
                 )
 
         self.log("PASS", "Smoke test completed successfully.")
@@ -194,7 +192,7 @@ class SmokeTestRunner:
             [
                 "-av",
                 f"{bundle_dir}/",
-                "guest:/Users/lume/.talon/user/talonbox_smoke_test/",
+                f"{transfer_service.running_vm.name}:/Users/lume/.talon/user/talonbox_smoke_test/",
             ]
         )
         if returncode:

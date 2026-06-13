@@ -10,11 +10,11 @@ from talonbox import transfer as transfer_module
 from tests.helpers import build_service_stack
 
 
-def test_transfer_service_rsync_rewrites_guest_destination() -> None:
+def test_transfer_service_rsync_rewrites_vm_destination() -> None:
     _, transfer_service, _ = build_service_stack()
 
     args = transfer_service.prepare_rsync_args(
-        ["-av", "./repo/", "guest:/Users/lume/.talon/user/repo/"]
+        ["-av", "./repo/", "talon-test:/Users/lume/.talon/user/repo/"]
     )
 
     assert args == [
@@ -24,10 +24,12 @@ def test_transfer_service_rsync_rewrites_guest_destination() -> None:
     ]
 
 
-def test_transfer_service_scp_download_rewrites_guest_source() -> None:
+def test_transfer_service_scp_download_rewrites_vm_source() -> None:
     _, transfer_service, _ = build_service_stack()
 
-    args = transfer_service.prepare_scp_args(["guest:/tmp/out.png", "/tmp/out.png"])
+    args = transfer_service.prepare_scp_args(
+        ["talon-test:/tmp/out.png", "/tmp/out.png"]
+    )
 
     assert args == [
         "lume@192.168.64.10:/tmp/out.png",
@@ -35,12 +37,35 @@ def test_transfer_service_scp_download_rewrites_guest_source() -> None:
     ]
 
 
+def test_transfer_service_extracts_vm_name_from_operands() -> None:
+    assert (
+        transfer_module.TransferService.extract_rsync_vm_name(
+            ["-av", "./repo/", "experiment:/tmp/repo/"]
+        )
+        == "experiment"
+    )
+
+
+def test_transfer_service_rejects_guest_prefix() -> None:
+    _, transfer_service, _ = build_service_stack()
+
+    with pytest.raises(click.ClickException, match="guest: paths have been replaced"):
+        transfer_service.prepare_rsync_args(["-av", "./repo/", "guest:/tmp/repo/"])
+
+
+def test_transfer_service_rejects_mixed_vm_names() -> None:
+    with pytest.raises(click.ClickException, match="same VM"):
+        transfer_module.TransferService.extract_rsync_vm_name(
+            ["-av", "one:/tmp/a", "two:/tmp/b", "/tmp/out/"]
+        )
+
+
 def test_transfer_service_rejects_transport_override() -> None:
     _, transfer_service, _ = build_service_stack()
 
     with pytest.raises(click.ClickException, match="Option not allowed"):
         transfer_service.prepare_rsync_args(
-            ["-e", "ssh", "./repo/", "guest:/tmp/repo/"]
+            ["-e", "ssh", "./repo/", "talon-test:/tmp/repo/"]
         )
 
 
@@ -48,7 +73,7 @@ def test_transfer_service_allows_rsync_host_write_flag_inside_sandbox() -> None:
     _, transfer_service, _ = build_service_stack()
 
     args = transfer_service.prepare_rsync_args(
-        ["--log-file=/tmp/talonbox-rsync.log", "./repo/", "guest:/tmp/repo/"]
+        ["--log-file=/tmp/talonbox-rsync.log", "./repo/", "talon-test:/tmp/repo/"]
     )
 
     assert args == [
@@ -58,19 +83,17 @@ def test_transfer_service_allows_rsync_host_write_flag_inside_sandbox() -> None:
     ]
 
 
-def test_transfer_service_rejects_guest_to_guest() -> None:
+def test_transfer_service_rejects_vm_to_vm() -> None:
     _, transfer_service, _ = build_service_stack()
 
-    with pytest.raises(click.ClickException, match="Guest-to-guest"):
-        transfer_service.prepare_scp_args(["guest:/tmp/a", "guest:/tmp/b"])
+    with pytest.raises(click.ClickException, match="VM-to-VM"):
+        transfer_service.prepare_scp_args(["talon-test:/tmp/a", "talon-test:/tmp/b"])
 
 
 def test_transfer_service_rejects_local_to_local() -> None:
     _, transfer_service, _ = build_service_stack()
 
-    with pytest.raises(
-        click.ClickException, match="Local-to-local transfers are not allowed"
-    ):
+    with pytest.raises(click.ClickException, match="Transfer requires one VM operand"):
         transfer_service.prepare_rsync_args(
             ["-av", "./repo/", "/Users/lume/.talon/user/repo/"]
         )
@@ -91,7 +114,7 @@ def test_transfer_service_rejects_symlink_escape_from_tmp(
         click.ClickException, match="Symlinks that escape /tmp are not allowed."
     ):
         transfer_service.prepare_rsync_args(
-            ["-av", "guest:/tmp/out.txt", str(escape_root / "link" / "out.txt")]
+            ["-av", "talon-test:/tmp/out.txt", str(escape_root / "link" / "out.txt")]
         )
 
 
@@ -114,7 +137,7 @@ def test_transfer_service_rsync_uses_fixed_vm_shell(
 
     monkeypatch.setattr("talonbox.transfer.subprocess.run", fake_run)
 
-    returncode = transfer_service.rsync(["-av", "src/", "guest:/tmp/dest"])
+    returncode = transfer_service.rsync(["-av", "src/", "talon-test:/tmp/dest"])
 
     assert returncode == 0
     assert recorded == [
@@ -151,7 +174,9 @@ def test_transfer_service_scp_uses_fixed_vm_ssh_options(
 
     monkeypatch.setattr("talonbox.transfer.subprocess.run", fake_run)
 
-    returncode = transfer_service.scp(["./settings.talon", "guest:/tmp/settings.talon"])
+    returncode = transfer_service.scp(
+        ["./settings.talon", "talon-test:/tmp/settings.talon"]
+    )
 
     assert returncode == 0
     assert recorded == [
