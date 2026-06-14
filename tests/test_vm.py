@@ -160,6 +160,7 @@ def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
     vm_controller = VmController("experiment", False)
     calls: list[tuple[str, object]] = []
     probe_calls: list[float] = []
+    idle_lock_calls: list[str] = []
     ensure_calls: list[str] = []
     running_vm = running_vm_fixture()
 
@@ -190,6 +191,11 @@ def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
     )
     monkeypatch.setattr(
         running_vm,
+        "prevent_idle_lock",
+        lambda: idle_lock_calls.append("prevent_idle_lock"),
+    )
+    monkeypatch.setattr(
+        running_vm,
         "ensure_talon_running",
         lambda: ensure_calls.append("ensure_talon_running"),
     )
@@ -202,6 +208,7 @@ def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
         ("wait_for_running_vm", "talonbox-experiment"),
     ]
     assert probe_calls == [vm_module.SSH_TIMEOUT_SECONDS]
+    assert idle_lock_calls == ["prevent_idle_lock"]
     assert ensure_calls == ["ensure_talon_running"]
 
 
@@ -224,6 +231,7 @@ def test_vm_controller_start_reuses_running_vm_without_spawn(
     )
     monkeypatch.setattr(vm_controller, "_running_vm_from_info", lambda info: running_vm)
     monkeypatch.setattr(running_vm, "probe_ssh", lambda *, timeout=0: None)
+    monkeypatch.setattr(running_vm, "prevent_idle_lock", lambda: None)
     monkeypatch.setattr(running_vm, "ensure_talon_running", lambda: None)
 
     assert vm_controller.start() is running_vm
@@ -348,6 +356,29 @@ def test_running_vm_ensure_talon_running_skips_launch_when_running(
     running_vm.ensure_talon_running()
 
     assert calls == ["pgrep -x Talon >/dev/null", "wait_for_talon_repl"]
+
+
+def test_running_vm_prevent_idle_lock_writes_current_host_screensaver_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running_vm = running_vm_fixture()
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        running_vm,
+        "run_shell",
+        lambda command, **kwargs: calls.append(command)
+        or subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    running_vm.prevent_idle_lock()
+
+    assert calls == [
+        "defaults -currentHost write com.apple.screensaver idleTime -int 0 && "
+        "defaults write com.apple.screensaver askForPassword -int 0 && "
+        "defaults write com.apple.screensaver askForPasswordDelay -int 0",
+        "killall cfprefsd >/dev/null 2>&1 || true",
+    ]
 
 
 def test_vm_controller_stop_falls_back_to_force_stop_for_stuck_vm(

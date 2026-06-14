@@ -140,6 +140,16 @@ class RunningVm:
             poll=True,
         )
 
+    def prevent_idle_lock(self) -> None:
+        # idleTime prevents automatic screensaver activation; the password keys
+        # keep other screensaver triggers from turning into a locked session.
+        self.run_shell(
+            "defaults -currentHost write com.apple.screensaver idleTime -int 0 && "
+            "defaults write com.apple.screensaver askForPassword -int 0 && "
+            "defaults write com.apple.screensaver askForPasswordDelay -int 0"
+        )
+        self.run_shell("killall cfprefsd >/dev/null 2>&1 || true")
+
     def download(self, remote_path: str, local_path: Path) -> None:
         result = self._run_transport_command(
             [
@@ -389,6 +399,7 @@ class VmController:
                 )
             running_vm = self._running_vm_from_info(ready_info)
             running_vm.probe_ssh(timeout=SSH_TIMEOUT_SECONDS)
+            running_vm.prevent_idle_lock()
             running_vm.ensure_talon_running()
         except click.ClickException:
             raise
