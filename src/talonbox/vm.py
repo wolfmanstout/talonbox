@@ -366,6 +366,10 @@ class VmController:
         except lume.LumeError as error:
             raise click.ClickException(str(error)) from None
 
+    def rename(self, dest: str) -> None:
+        self.clone(dest)
+        self.delete()
+
     def delete(self) -> None:
         info = self.get_vm()
         if info.status != "stopped":

@@ -106,6 +106,44 @@ def test_vm_controller_clone_rejects_running_source(
         vm_controller.clone("experiment")
 
 
+def test_vm_controller_rename_clones_then_deletes_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    calls: list[tuple[str, object]] = []
+
+    def fake_get_vm_info(vm: str, debug: bool = False) -> VmInfo | None:
+        del debug
+        calls.append(("get_vm_info", vm))
+        if vm == "talonbox-experiment":
+            return VmInfo(vm, "stopped", None)
+        return None
+
+    monkeypatch.setattr(vm_module.lume, "get_vm_info", fake_get_vm_info)
+    monkeypatch.setattr(
+        vm_module.lume,
+        "clone_vm",
+        lambda source, target, debug=False: calls.append(
+            ("clone_vm", (source, target))
+        ),
+    )
+    monkeypatch.setattr(
+        vm_module.lume,
+        "delete_vm",
+        lambda vm, debug=False: calls.append(("delete_vm", vm)),
+    )
+
+    vm_controller.rename("experiment-old")
+
+    assert calls == [
+        ("get_vm_info", "talonbox-experiment"),
+        ("get_vm_info", "talonbox-experiment-old"),
+        ("clone_vm", ("talonbox-experiment", "talonbox-experiment-old")),
+        ("get_vm_info", "talonbox-experiment"),
+        ("delete_vm", "talonbox-experiment"),
+    ]
+
+
 @pytest.mark.parametrize("status", ["running", "stopping"])
 def test_vm_controller_delete_refuses_non_stopped_vm(
     monkeypatch: pytest.MonkeyPatch,
@@ -167,8 +205,9 @@ def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
     monkeypatch.setattr(
         vm_module.lume,
         "get_vm_info",
-        lambda vm, debug=False: calls.append(("get_vm_info", vm))
-        or VmInfo(vm, "stopped", None),
+        lambda vm, debug=False: (
+            calls.append(("get_vm_info", vm)) or VmInfo(vm, "stopped", None)
+        ),
     )
     monkeypatch.setattr(
         vm_module.lume,
@@ -178,10 +217,10 @@ def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
     monkeypatch.setattr(
         vm_module.lume,
         "wait_for_running_vm",
-        lambda vm, timeout, debug=False, launch=None: calls.append(
-            ("wait_for_running_vm", vm)
-        )
-        or VmInfo(vm, "running", "192.168.64.10"),
+        lambda vm, timeout, debug=False, launch=None: (
+            calls.append(("wait_for_running_vm", vm))
+            or VmInfo(vm, "running", "192.168.64.10")
+        ),
     )
     monkeypatch.setattr(vm_controller, "_running_vm_from_info", lambda info: running_vm)
     monkeypatch.setattr(
@@ -344,8 +383,9 @@ def test_running_vm_ensure_talon_running_skips_launch_when_running(
     monkeypatch.setattr(
         running_vm,
         "run_shell",
-        lambda command, **kwargs: calls.append(command)
-        or subprocess.CompletedProcess([], 0, "", ""),
+        lambda command, **kwargs: (
+            calls.append(command) or subprocess.CompletedProcess([], 0, "", "")
+        ),
     )
     monkeypatch.setattr(
         running_vm,
@@ -367,8 +407,9 @@ def test_running_vm_prevent_idle_lock_writes_current_host_screensaver_defaults(
     monkeypatch.setattr(
         running_vm,
         "run_shell",
-        lambda command, **kwargs: calls.append(command)
-        or subprocess.CompletedProcess([], 0, "", ""),
+        lambda command, **kwargs: (
+            calls.append(command) or subprocess.CompletedProcess([], 0, "", "")
+        ),
     )
 
     running_vm.prevent_idle_lock()

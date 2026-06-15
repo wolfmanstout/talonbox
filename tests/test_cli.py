@@ -56,6 +56,18 @@ def test_clone_help_documents_apfs_clone() -> None:
     assert "talonbox clone golden experiment" in result.output
 
 
+def test_rename_help_documents_requirements() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["rename", "--help"])
+
+    assert result.exit_code == 0
+    assert "Rename SOURCE to DEST" in result.output
+    assert "source VM must be stopped" in result.output
+    assert "destination VM must not already exist" in result.output
+    assert "talonbox rename experiment experiment-old" in result.output
+
+
 def test_exec_help_explains_double_dash_usage() -> None:
     runner = CliRunner()
 
@@ -126,6 +138,24 @@ def test_clone_command_delegates_to_vm_controller(
 
     assert result.exit_code == 0
     assert calls == [("golden", "experiment")]
+
+
+def test_rename_command_delegates_to_vm_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "rename",
+        lambda self, dest: calls.append((self.vm, dest)),
+    )
+
+    result = runner.invoke(cli, ["rename", "experiment", "experiment-old"])
+
+    assert result.exit_code == 0
+    assert calls == [("experiment", "experiment-old")]
 
 
 def test_status_command_delegates_to_vm_controller(
@@ -203,8 +233,9 @@ def test_cli_rejects_non_macos_before_running_commands(
     monkeypatch.setattr(
         cli_module.VmController,
         "get_vm",
-        lambda self: calls.append("get_vm")
-        or VmInfo(self.vm, "running", "192.168.64.10"),
+        lambda self: (
+            calls.append("get_vm") or VmInfo(self.vm, "running", "192.168.64.10")
+        ),
     )
 
     result = runner.invoke(cli, ["status", "experiment"])

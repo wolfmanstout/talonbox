@@ -15,7 +15,17 @@ from .vm import VmController
 HELP_COMMAND_GROUPS = (
     (
         "VM lifecycle",
-        ("create", "clone", "delete", "list", "status", "start", "stop", "smoke-test"),
+        (
+            "create",
+            "clone",
+            "rename",
+            "delete",
+            "list",
+            "status",
+            "start",
+            "stop",
+            "smoke-test",
+        ),
     ),
     ("Guest shell", ("exec", "rsync", "scp")),
     ("Talon RPC", ("restart-talon", "repl", "mimic", "screenshot")),
@@ -147,6 +157,21 @@ def create(name: str) -> None:
 @pass_settings
 def clone(settings: CliSettings, source: str, dest: str) -> None:
     VmController(source, settings.debug).clone(dest)
+
+
+@cli.command(
+    short_help="Rename a stopped VM.",
+    help=(
+        "Rename SOURCE to DEST.\n\n"
+        "The source VM must be stopped, and the destination VM must not already exist."
+    ),
+    epilog=_examples_epilog("talonbox rename experiment experiment-old"),
+)
+@click.argument("source", metavar="SOURCE")
+@click.argument("dest", metavar="DEST")
+@pass_settings
+def rename(settings: CliSettings, source: str, dest: str) -> None:
+    VmController(source, settings.debug).rename(dest)
 
 
 @cli.command(
