@@ -190,7 +190,7 @@ class SmokeTestRunner:
     ) -> None:
         returncode = transfer_service.rsync(
             [
-                "-av",
+                "-a",
                 f"{bundle_dir}/",
                 f"{transfer_service.running_vm.name}:/Users/lume/.talon/user/talonbox_smoke_test/",
             ]

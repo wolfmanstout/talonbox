@@ -41,7 +41,7 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "Talon RPC:" in result.output
     assert "talonbox clone golden experiment" in result.output
     assert (
-        "talonbox rsync -av ~/.talon/user/ experiment:/Users/lume/.talon/user/"
+        "talonbox rsync -a ~/.talon/user/ experiment:/Users/lume/.talon/user/"
         in result.output
     )
 
@@ -76,6 +76,33 @@ def test_exec_help_explains_double_dash_usage() -> None:
     assert result.exit_code == 0
     assert "Place `--` before the remote command" in result.output
     assert "talonbox exec experiment -- whoami" in result.output
+
+
+def test_rsync_help_uses_quiet_vm_user_path_examples() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["rsync", "--help"])
+
+    assert result.exit_code == 0
+    assert (
+        "talonbox rsync -a ./repo/ experiment:/Users/lume/.talon/user/repo/"
+        in result.output
+    )
+    assert "talonbox rsync -av" not in result.output
+
+
+def test_scp_help_uses_quiet_vm_user_path_examples() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["scp", "--help"])
+
+    assert result.exit_code == 0
+    assert (
+        "talonbox scp -q ./settings.talon "
+        "experiment:/Users/lume/.talon/user/settings.talon" in result.output
+    )
+    assert "talonbox scp -q experiment:/tmp/out.png /tmp/out.png" in result.output
+    assert "talonbox scp ./settings.talon" not in result.output
 
 
 def test_mimic_help_works() -> None:

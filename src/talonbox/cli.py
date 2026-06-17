@@ -111,8 +111,8 @@ def _build_smoke_test_runner(settings: CliSettings, source: str) -> SmokeTestRun
     epilog=_examples_epilog(
         "talonbox clone golden experiment",
         "talonbox start experiment",
-        "talonbox rsync -av ~/.talon/user/ experiment:/Users/lume/.talon/user/",
-        "talonbox exec experiment -- uname -a",
+        "talonbox rsync -a ~/.talon/user/ experiment:/Users/lume/.talon/user/",
+        "talonbox exec experiment -- whoami",
         "talonbox mimic experiment 'focus chrome'",
         "talonbox screenshot experiment /tmp/talon.png",
         "talonbox smoke-test golden",
@@ -290,8 +290,8 @@ def smoke_test(settings: CliSettings, source: str) -> None:
     ),
     epilog=_examples_epilog(
         "talonbox exec experiment -- whoami",
-        "talonbox exec experiment -- sh -lc 'ls -la ~/.talon'",
-        'talonbox exec experiment -- "ps aux | grep Safari"',
+        "talonbox exec experiment -- test -d ~/.talon/user",
+        "talonbox exec experiment -- pgrep -x Talon",
     ),
 )
 @click.argument("name", metavar="NAME")
@@ -328,8 +328,8 @@ def exec_command(settings: CliSettings, name: str, command: tuple[str, ...]) -> 
         "that boundary fail with an obvious permission error."
     ),
     epilog=_examples_epilog(
-        "talonbox rsync -av ./repo/ experiment:/Users/lume/.talon/user/repo/",
-        "talonbox rsync -av experiment:/Users/lume/Pictures/ /tmp/guest-pictures/",
+        "talonbox rsync -a ./repo/ experiment:/Users/lume/.talon/user/repo/",
+        "talonbox rsync -a experiment:/Users/lume/Pictures/ /tmp/guest-pictures/",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
@@ -355,8 +355,8 @@ def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
         "that boundary fail with an obvious permission error."
     ),
     epilog=_examples_epilog(
-        "talonbox scp ./settings.talon experiment:/Users/lume/.talon/user/settings.talon",
-        "talonbox scp experiment:/tmp/out.png /tmp/out.png",
+        "talonbox scp -q ./settings.talon experiment:/Users/lume/.talon/user/settings.talon",
+        "talonbox scp -q experiment:/tmp/out.png /tmp/out.png",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="SCP_ARGS...")

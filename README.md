@@ -39,7 +39,7 @@ Typical workflow:
 ```bash
 talonbox clone golden experiment
 talonbox start experiment
-talonbox rsync -av ~/.talon/user/ experiment:/Users/lume/.talon/user/
+talonbox rsync -a ~/.talon/user/ experiment:/Users/lume/.talon/user/
 talonbox mimic experiment "focus chrome"
 talonbox screenshot experiment /tmp/talon.png
 talonbox stop experiment
@@ -76,7 +76,7 @@ General guest access:
 
 ```bash
 talonbox exec experiment -- whoami
-talonbox scp experiment:/tmp/out.png /tmp/out.png
+talonbox scp -q experiment:/tmp/out.png /tmp/out.png
 printf 'print(1 + 1)\n' | talonbox repl experiment
 ```
 

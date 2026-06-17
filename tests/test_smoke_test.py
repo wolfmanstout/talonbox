@@ -141,7 +141,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
     monkeypatch.setattr(
         transfer_service,
         "rsync",
-        lambda args: steps.append("rsync") or 0,
+        lambda args: steps.append(f"rsync:{args[0]}") or 0,
     )
     monkeypatch.setattr(
         temp_controller,
@@ -199,7 +199,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "for_vm:True",
         "clone:True",
         "start",
-        "rsync",
+        "rsync:-a",
         "restart:False:True",
         "mimic:talonbox smoke test",
         "verify_marker",
