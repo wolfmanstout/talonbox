@@ -68,22 +68,32 @@ def list_vms(*, debug: bool = False) -> list[VmInfo]:
         raise LumeError(
             f"Invalid JSON from `lume ls --format json`: {raw_output}"
         ) from error
-    return [
-        VmInfo(
-            name=str(record.get("name", "")),
-            status=record.get("status", "unknown"),
-            ip_address=record.get("ipAddress"),
-            vnc_url=record.get("vncUrl"),
-        )
-        for record in records
-    ]
+    return [_vm_info_from_record(record) for record in records]
 
 
 def get_vm_info(name: str, *, debug: bool = False) -> VmInfo | None:
-    for info in list_vms(debug=debug):
-        if info.name == name:
-            return info
-    return None
+    try:
+        result = _run_lume(["get", name, "--format", "json"], debug=debug)
+    except LumeError as error:
+        if "virtual machine not found" in str(error).lower():
+            return None
+        raise
+    try:
+        parsed = _parse_lume_json_value(result.stdout)
+    except json.JSONDecodeError as error:
+        raw_output = result.stdout.strip() or "<empty stdout>"
+        raise LumeError(
+            f"Invalid JSON from `lume get {name} --format json`: {raw_output}"
+        ) from error
+    if isinstance(parsed, Mapping):
+        return _vm_info_from_record(parsed)
+    if isinstance(parsed, list):
+        for record in parsed:
+            if isinstance(record, Mapping) and record.get("name") == name:
+                return _vm_info_from_record(record)
+        return None
+    raw_output = result.stdout.strip() or "<empty stdout>"
+    raise LumeError(f"Invalid JSON from `lume get {name} --format json`: {raw_output}")
 
 
 def wait_for_status(
@@ -217,18 +227,20 @@ def _read_launch_log(log_path: Path, *, max_lines: int = 20) -> str:
     return "\n".join(lines[-max_lines:])
 
 
-def _parse_lume_json(output: str) -> list[dict[str, Any]]:
+def _parse_lume_json_value(output: str) -> Any:
     try:
-        parsed = json.loads(output)
+        return json.loads(output)
     except json.JSONDecodeError:
         lines = output.splitlines()
         for index, line in enumerate(lines):
             stripped = line.lstrip()
             if stripped == "[" or stripped.startswith("[{") or stripped.startswith("{"):
-                parsed = json.loads("\n".join(lines[index:]))
-                break
-        else:
-            raise
+                return json.loads("\n".join(lines[index:]))
+        raise
+
+
+def _parse_lume_json(output: str) -> list[dict[str, Any]]:
+    parsed = _parse_lume_json_value(output)
 
     if not isinstance(parsed, list):
         raise json.JSONDecodeError("Expected a JSON list", output, 0)
@@ -239,6 +251,15 @@ def _parse_lume_json(output: str) -> list[dict[str, Any]]:
             raise json.JSONDecodeError("Expected JSON objects in list", output, 0)
         records.append(dict(record))
     return records
+
+
+def _vm_info_from_record(record: Mapping[str, Any]) -> VmInfo:
+    return VmInfo(
+        name=str(record.get("name", "")),
+        status=record.get("status", "unknown"),
+        ip_address=record.get("ipAddress"),
+        vnc_url=record.get("vncUrl"),
+    )
 
 
 def _collect_vm_process_groups(name: str, *, debug: bool) -> set[int]:

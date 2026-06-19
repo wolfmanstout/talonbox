@@ -57,6 +57,9 @@ through, and it is not representative of the normal talonbox experience. Once a
 golden VM passes `smoke-test`, cloning it for future Talon experiments should
 feel fast, disposable, and a little bit magical.
 
+The Lume VM user is `lume`, and the default Lume password is `lume`. You may
+need those credentials while completing setup over VNC.
+
 For top-level help, run:
 
 ```bash

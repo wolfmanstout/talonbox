@@ -170,15 +170,18 @@ Run Lume's maintained setup preset as a separate step. `--no-display` keeps host
 lume setup tahoe-base --unattended tahoe --debug --no-display
 ```
 
-If setup fails, have the agent inspect the debug directory named in Lume's output. The most useful files are usually the `FAILED` screenshot and its `-ocr.json` companion. To understand what the maintained preset was trying to do, have the agent inspect the installed Lume setup docs and preset instead of maintaining a talonbox-specific setup script:
+If setup fails, have the agent inspect the debug directory named in Lume's output. The most useful files are usually the `FAILED` screenshot and its `-ocr.json` companion. To understand what the maintained preset was trying to do, have the agent inspect the installed Lume setup docs and preset:
 
 ```bash
+lume get tahoe-base
 lume setup --help
 lume dump-docs
 brew list lume 2>/dev/null | rg 'unattended-presets|tahoe.yml'
 ```
 
-If the maintained preset is stale for the current macOS Setup Assistant, finish Setup Assistant manually over VNC. Before cloning the base VM, make sure Remote Login is enabled for the `lume` user, the `lume` password is still `lume`, and the VM logs into the desktop automatically. `talonbox restart-talon` launches Talon through Terminal, so a logged-in GUI session is required.
+The Lume VM user is `lume`, and the default Lume password is `lume`.
+
+Do not patch or edit Lume's unattended setup YAML during talonbox setup. If the maintained preset is stale for the current macOS Setup Assistant, use the YAML contents only to advise the user on which setup steps remain, then run `open` with the VNC URL from `lume get tahoe-base` and let the user finish Setup Assistant manually. Before cloning the base VM, make sure Remote Login is enabled for the `lume` user, the `lume` password is still `lume`, and the VM logs into the desktop automatically. `talonbox restart-talon` launches Talon through Terminal, so a logged-in GUI session is required.
 
 ## 4. Clone and start `{name}`
 

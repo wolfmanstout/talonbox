@@ -10,19 +10,20 @@ from talonbox.lume import VmInfo
 
 
 def test_get_vm_info_surfaces_raw_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
     monkeypatch.setattr(
         lume_module,
         "_run_lume",
-        lambda args, debug=False, capture_output=True: subprocess.CompletedProcess(
-            args, 0, '{"bad"', ""
-        ),
+        lambda args, debug=False, capture_output=True: calls.append(args)
+        or subprocess.CompletedProcess(args, 0, '{"bad"', ""),
     )
 
     with pytest.raises(
         lume_module.LumeError,
-        match=r'Invalid JSON from `lume ls --format json`: \{"bad"',
+        match=r'Invalid JSON from `lume get talon-test --format json`: \{"bad"',
     ):
         lume_module.get_vm_info("talon-test")
+    assert calls == [["get", "talon-test", "--format", "json"]]
 
 
 def test_get_vm_info_tolerates_log_line_before_json(
@@ -73,6 +74,20 @@ def test_get_vm_info_reads_vnc_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert info == VmInfo(
         "talon-test", "running", "192.168.64.10", "vnc://127.0.0.1:5901"
     )
+
+
+def test_get_vm_info_returns_none_when_lume_get_reports_missing_vm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_lume(
+        args: list[str], debug: bool = False, capture_output: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        del args, debug, capture_output
+        raise lume_module.LumeError("Virtual machine not found: talon-test")
+
+    monkeypatch.setattr(lume_module, "_run_lume", fake_run_lume)
+
+    assert lume_module.get_vm_info("talon-test") is None
 
 
 def test_clone_vm_delegates_to_lume_clone(monkeypatch: pytest.MonkeyPatch) -> None:

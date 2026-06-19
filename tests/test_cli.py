@@ -93,8 +93,16 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert (
         "lume setup tahoe-base --unattended tahoe --debug --no-display" in result.output
     )
+    assert "lume get tahoe-base" in result.output
+    assert "lume ls" not in result.output
+    assert "lume list" not in result.output
     assert "lume dump-docs" in result.output
     assert "FAILED` screenshot and its `-ocr.json` companion" in result.output
+    assert "Do not patch or edit Lume's unattended setup YAML" in result.output
+    assert "use the YAML contents only to advise the user" in result.output
+    assert "run `open` with the VNC URL from `lume get tahoe-base`" in result.output
+    assert "The Lume VM user is `lume`" in result.output
+    assert "the default Lume password is `lume`" in result.output
     assert (
         "Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands."
         in result.output
