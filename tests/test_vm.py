@@ -277,6 +277,31 @@ def test_vm_controller_start_reuses_running_vm_without_spawn(
     assert spawn_calls == []
 
 
+def test_vm_controller_start_can_skip_talon_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    running_vm = running_vm_fixture()
+    ensure_calls: list[str] = []
+
+    monkeypatch.setattr(
+        vm_module.lume,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
+    )
+    monkeypatch.setattr(vm_controller, "_running_vm_from_info", lambda info: running_vm)
+    monkeypatch.setattr(running_vm, "probe_ssh", lambda *, timeout=0: None)
+    monkeypatch.setattr(running_vm, "prevent_idle_lock", lambda: None)
+    monkeypatch.setattr(
+        running_vm,
+        "ensure_talon_running",
+        lambda: ensure_calls.append("ensure_talon_running"),
+    )
+
+    assert vm_controller.start(require_talon=False) is running_vm
+    assert ensure_calls == []
+
+
 def test_vm_controller_start_cleans_up_failed_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

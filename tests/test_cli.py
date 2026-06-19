@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -83,15 +84,26 @@ def test_create_command_prints_default_url_instructions() -> None:
         in result.output
     )
     assert (
-        "lume create tahoe-base --os macos --ipsw latest --unattended tahoe --disk-size 100GB"
+        "lume create tahoe-base --os macos --ipsw latest --disk-size 100GB"
         in result.output
     )
+    assert (
+        "lume setup tahoe-base --unattended tahoe --debug --no-display" in result.output
+    )
+    assert "lume dump-docs" in result.output
+    assert "FAILED` screenshot and its `-ocr.json` companion" in result.output
     assert (
         "Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands."
         in result.output
     )
+    assert "lume stop tahoe-base" in result.output
     assert "lume clone tahoe-base talonbox-experiment" in result.output
-    assert "lume run talonbox-experiment" in result.output
+    assert "talonbox start --no-talon experiment" in result.output
+    assert (
+        "starts the VM and waits for SSH without trying to launch Talon"
+        in result.output
+    )
+    assert "talonbox exec experiment -- whoami" in result.output
     assert (
         "talonbox exec experiment -- curl -L -o /tmp/talon.dmg https://talonvoice.com/dl/latest/talon-mac.dmg"
         in result.output
@@ -101,6 +113,10 @@ def test_create_command_prints_default_url_instructions() -> None:
         in result.output
     )
     assert "talonbox restart-talon experiment" in result.output
+    assert (
+        "talonbox screenshot --screencapture experiment /tmp/talon-first-run.png"
+        in result.output
+    )
     assert "talonbox status experiment" in result.output
     assert (
         "open \"$(talonbox status experiment | awk '/^vnc:/ {print $2}')\""
@@ -137,6 +153,18 @@ def test_rename_help_documents_requirements() -> None:
     assert "source VM must be stopped" in result.output
     assert "destination VM must not already exist" in result.output
     assert "talonbox rename experiment experiment-old" in result.output
+
+
+def test_start_help_documents_no_talon_mode() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["start", "--help"])
+    output_words = " ".join(result.output.split())
+
+    assert result.exit_code == 0
+    assert "--no-talon" in result.output
+    assert "do not launch Talon or wait for its REPL" in output_words
+    assert "talonbox start --no-talon experiment" in result.output
 
 
 def test_exec_help_explains_double_dash_usage() -> None:
@@ -185,6 +213,20 @@ def test_mimic_help_works() -> None:
     assert "Send one phrase to the VM's Talon REPL" in result.output
 
 
+def test_screenshot_help_documents_explicit_screencapture_mode() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["screenshot", "--help"])
+
+    assert result.exit_code == 0
+    assert "--screencapture" in result.output
+    assert "requires Talon's REPL" in result.output
+    assert (
+        "talonbox screenshot --screencapture experiment /tmp/talon-first-run.png"
+        in result.output
+    )
+
+
 def test_smoke_test_help_mentions_clone_and_artifacts() -> None:
     runner = CliRunner()
 
@@ -200,10 +242,10 @@ def test_start_command_delegates_to_vm_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = CliRunner()
-    calls: list[str] = []
+    calls: list[tuple[str, bool]] = []
 
-    def fake_start(self: VmController):
-        calls.append(self.vm)
+    def fake_start(self: VmController, *, require_talon: bool = True):
+        calls.append((self.vm, require_talon))
         return running_vm_fixture()
 
     monkeypatch.setattr(cli_module.VmController, "start", fake_start)
@@ -217,7 +259,31 @@ def test_start_command_delegates_to_vm_controller(
 
     assert result.exit_code == 0
     assert result.output == "name: experiment\nstatus: running\n"
-    assert calls == ["experiment"]
+    assert calls == [("experiment", True)]
+
+
+def test_start_command_can_skip_talon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, bool]] = []
+
+    def fake_start(self: VmController, *, require_talon: bool = True):
+        calls.append((self.vm, require_talon))
+        return running_vm_fixture()
+
+    monkeypatch.setattr(cli_module.VmController, "start", fake_start)
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "format_vm_info",
+        lambda self, info: ["name: experiment", "status: running"],
+    )
+
+    result = runner.invoke(cli, ["start", "--no-talon", "experiment"])
+
+    assert result.exit_code == 0
+    assert result.output == "name: experiment\nstatus: running\n"
+    assert calls == [("experiment", False)]
 
 
 def test_clone_command_delegates_to_vm_controller(
@@ -275,6 +341,52 @@ def test_status_command_delegates_to_vm_controller(
 
     assert result.exit_code == 0
     assert result.output == "name: experiment\nstatus: running\n"
+
+
+def test_screenshot_command_uses_talon_capture_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, str, bool]] = []
+
+    class FakeClient:
+        def capture_screenshot(
+            self, filepath: Path, *, screencapture: bool = False
+        ) -> None:
+            calls.append(("capture_screenshot", str(filepath), screencapture))
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
+    )
+
+    result = runner.invoke(cli, ["screenshot", "experiment", "/tmp/screen.png"])
+
+    assert result.exit_code == 0
+    assert calls == [("capture_screenshot", "/tmp/screen.png", False)]
+
+
+def test_screenshot_command_can_use_screencapture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, str, bool]] = []
+
+    class FakeClient:
+        def capture_screenshot(
+            self, filepath: Path, *, screencapture: bool = False
+        ) -> None:
+            calls.append(("capture_screenshot", str(filepath), screencapture))
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
+    )
+
+    result = runner.invoke(
+        cli, ["screenshot", "--screencapture", "experiment", "/tmp/screen.png"]
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("capture_screenshot", "/tmp/screen.png", True)]
 
 
 def test_list_command_prints_public_vms(monkeypatch: pytest.MonkeyPatch) -> None:

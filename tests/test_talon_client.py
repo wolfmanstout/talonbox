@@ -129,6 +129,72 @@ def test_talon_client_screenshot_uses_talon_capture_and_download(
     assert cleanup_commands[0].startswith('rm -f "/tmp/talonbox-screenshot-')
 
 
+def test_talon_client_screenshot_requires_talon_repl_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, transfer_service, talon_client = build_service_stack()
+    target = tmp_path / "shots" / "screen.png"
+
+    monkeypatch.setattr(
+        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
+    )
+
+    def fail_wait(*, timeout: float = vm_module.TALON_REPL_TIMEOUT_SECONDS) -> None:
+        del timeout
+        raise vm_module.RemoteCommandError("Remote command failed: test -S repl.sock")
+
+    monkeypatch.setattr(talon_client.running_vm, "wait_for_talon_repl", fail_wait)
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_shell",
+        lambda command, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    with pytest.raises(click.ClickException, match="test -S repl.sock"):
+        talon_client.capture_screenshot(target)
+
+
+def test_talon_client_screenshot_can_use_explicit_screencapture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, transfer_service, talon_client = build_service_stack()
+    shell_commands: list[str] = []
+    downloads: list[tuple[str, str, Path]] = []
+    target = tmp_path / "shots" / "screen.png"
+
+    monkeypatch.setattr(
+        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=0: pytest.fail("screencapture should not wait for REPL"),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_shell",
+        lambda command, **kwargs: (
+            shell_commands.append(command) or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "download",
+        lambda remote, local: (
+            downloads.append((talon_client.running_vm.ip_address, remote, local))
+            or local.write_bytes(b"not-a-png")
+        ),
+    )
+
+    talon_client.capture_screenshot(target, screencapture=True)
+
+    assert target.parent.exists()
+    assert shell_commands[0].startswith("screencapture -x /tmp/talonbox-screenshot-")
+    assert shell_commands[1].startswith('rm -f "/tmp/talonbox-screenshot-')
+    assert downloads[0][0] == "192.168.64.10"
+    assert downloads[0][2] == target
+
+
 def test_talon_client_screenshot_rejects_output_outside_tmp() -> None:
     _, _, talon_client = build_service_stack()
 

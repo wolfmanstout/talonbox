@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shlex
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -33,24 +35,18 @@ class TalonClient:
         if result.returncode:
             raise click.exceptions.Exit(result.returncode)
 
-    def capture_screenshot(self, filepath: Path) -> None:
+    def capture_screenshot(
+        self, filepath: Path, *, screencapture: bool = False
+    ) -> None:
         filepath = self.transfer_service.normalize_local_output_path(filepath)
         filepath.parent.mkdir(parents=True, exist_ok=True)
         remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}.png"
         try:
+            if screencapture:
+                self._capture_with_screencapture(remote_path, filepath)
+                return
             self.running_vm.wait_for_talon_repl()
-            result = self.running_vm.run_repl(
-                "\n".join(
-                    [
-                        "from talon import screen",
-                        f"path = {remote_path!r}",
-                        "img = screen.capture_rect(screen.main().rect, retina=False)",
-                        "img.save(path) if hasattr(img, 'save') else img.write_file(path)",
-                        "print(path)",
-                        "",
-                    ]
-                ),
-            )
+            result = self._capture_with_talon(remote_path)
             if result.returncode:
                 raise click.exceptions.Exit(result.returncode)
             self.running_vm.download(remote_path, filepath)
@@ -63,3 +59,21 @@ class TalonClient:
                 )
             except (RemoteCommandError, TransportError):
                 pass
+
+    def _capture_with_talon(self, remote_path: str) -> subprocess.CompletedProcess[str]:
+        return self.running_vm.run_repl(
+            "\n".join(
+                [
+                    "from talon import screen",
+                    f"path = {remote_path!r}",
+                    "img = screen.capture_rect(screen.main().rect, retina=False)",
+                    "img.save(path) if hasattr(img, 'save') else img.write_file(path)",
+                    "print(path)",
+                    "",
+                ]
+            ),
+        )
+
+    def _capture_with_screencapture(self, remote_path: str, filepath: Path) -> None:
+        self.running_vm.run_shell(f"screencapture -x {shlex.quote(remote_path)}")
+        self.running_vm.download(remote_path, filepath)

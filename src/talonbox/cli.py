@@ -142,28 +142,57 @@ Follow the Lume quickstart as needed:
 
 https://cua.ai/docs/lume/guide/getting-started/quickstart
 
-Unattended install is highly recommended. A 100 GB disk is recommended so the VM has enough room for macOS upgrades.
+A 100 GB disk is recommended so the VM has enough room for macOS upgrades.
 
 This example keeps `tahoe-base` as a clean Lume base VM outside talonbox, which makes it quicker to create additional talonbox VMs later.
 
 ```bash
-lume create tahoe-base --os macos --ipsw latest --unattended tahoe --disk-size 100GB
+lume create tahoe-base --os macos --ipsw latest --disk-size 100GB
 ```
 
 This usually takes about 20 minutes.
 
-## 3. Clone and start `{name}`
+If VM creation succeeds but a later setup step fails, avoid downloading the IPSW again when possible. Re-run `lume create` with the cached IPSW path from Lume's output or temp directory in place of `latest`.
 
-After the base VM is complete, create the Talon VM from it. Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands.
+## 3. Run macOS setup
+
+Run Lume's maintained setup preset as a separate step. `--no-display` keeps host mouse input from interfering with the automation, and `--debug` leaves screenshots and OCR output behind if the preset fails.
 
 ```bash
-lume clone tahoe-base {quoted_lume_name}
-lume run {quoted_lume_name}
+lume setup tahoe-base --unattended tahoe --debug --no-display
 ```
 
-## 4. Install Talon
+If setup fails, have the agent inspect the debug directory named in Lume's output. The most useful files are usually the `FAILED` screenshot and its `-ocr.json` companion. To understand what the maintained preset was trying to do, have the agent inspect the installed Lume setup docs and preset instead of maintaining a talonbox-specific setup script:
+
+```bash
+lume setup --help
+lume dump-docs
+brew list lume 2>/dev/null | rg 'unattended-presets|tahoe.yml'
+```
+
+If the maintained preset is stale for the current macOS Setup Assistant, finish Setup Assistant manually over VNC. Before cloning the base VM, make sure Remote Login is enabled for the `lume` user, the `lume` password is still `lume`, and the VM logs into the desktop automatically. `talonbox restart-talon` launches Talon through Terminal, so a logged-in GUI session is required.
+
+## 4. Clone and start `{name}`
+
+After the base VM is complete, stop it and create the Talon VM from it. Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands.
+
+```bash
+lume stop tahoe-base
+lume clone tahoe-base {quoted_lume_name}
+talonbox start --no-talon {quoted_name}
+```
+
+`--no-talon` starts the VM and waits for SSH without trying to launch Talon or wait for Talon's REPL. Use it while creating or repairing a VM before Talon is fully installed and accepted.
+
+## 5. Install Talon
 
 Use `talonbox exec` for guest commands and `talonbox scp` for file copies.
+
+Verify SSH access:
+
+```bash
+talonbox exec {quoted_name} -- whoami
+```
 
 Install Rosetta:
 
@@ -188,6 +217,12 @@ Start Talon through talonbox:
 talonbox restart-talon {quoted_name}
 ```
 
+If Talon is blocked on first-run UI before its REPL is available, request a plain macOS screenshot explicitly:
+
+```bash
+talonbox screenshot --screencapture {quoted_name} /tmp/talon-first-run.png
+```
+
 Get the VNC URL and open it with the Mac Screen Sharing app:
 
 ```bash
@@ -197,7 +232,7 @@ open "$(talonbox status {quoted_name} | awk '/^vnc:/ {{print $2}}')"
 
 Accept the Talon EULA yourself in the GUI. Agents must never try to accept the Talon EULA for you.
 
-## 5. Grant permissions and choose a speech model
+## 6. Grant permissions and choose a speech model
 
 Open System Settings in the VM and go to Privacy & Security.
 
@@ -210,7 +245,7 @@ From the Talon menu, select the speech model you want to use. You do not need to
 
 Install any other apps you expect to test Talon with.
 
-## 6. Reboot and stop the VM
+## 7. Reboot and stop the VM
 
 When setup is complete, quit all apps and restart the VM. When macOS asks, uncheck the box to reopen windows after logging back in.
 
@@ -220,7 +255,7 @@ After the VM has restarted and you are done with setup, stop it:
 talonbox stop {quoted_name}
 ```
 
-## 7. Smoke test the finished VM
+## 8. Smoke test the finished VM
 
 Confirm the installation with:
 
@@ -368,15 +403,27 @@ def status(settings: CliSettings, name: str) -> None:
     help=(
         "Start or resume an existing VM in the background, wait for SSH, and start "
         "Talon if it is not already running.\n\n"
-        "This command never clones, deletes, or wipes the VM."
+        "This command never clones, deletes, or wipes the VM. Use `--no-talon` while "
+        "creating or repairing a VM before Talon is installed or accepted."
     ),
-    epilog=_examples_epilog("talonbox start experiment"),
+    epilog=_examples_epilog(
+        "talonbox start experiment",
+        "talonbox start --no-talon experiment",
+    ),
 )
 @click.argument("name", metavar="NAME")
+@click.option(
+    "--no-talon",
+    is_flag=True,
+    help="Start the VM and wait for SSH, but do not launch Talon or wait for its REPL.",
+)
 @pass_settings
-def start(settings: CliSettings, name: str) -> None:
+def start(settings: CliSettings, name: str, no_talon: bool) -> None:
     vm_controller = VmController(name, settings.debug)
-    _echo_vm_info(vm_controller, vm_controller.start().to_vm_info())
+    _echo_vm_info(
+        vm_controller,
+        vm_controller.start(require_talon=not no_talon).to_vm_info(),
+    )
 
 
 @cli.command(
@@ -559,18 +606,33 @@ def mimic(settings: CliSettings, name: str, command: str) -> None:
 @cli.command(
     short_help="Capture a VM screenshot and download it locally.",
     help=(
-        "Use Talon's screen capture API inside the VM, save the image to a guest temp file, "
-        "download it to a host path under `/tmp`, and remove the guest temp file."
+        "Capture a VM screenshot, save it to a guest temp file, download it to a host "
+        "path under `/tmp`, and remove the guest temp file.\n\n"
+        "By default this uses Talon's screen capture API and requires Talon's REPL. Use "
+        "`--screencapture` before Talon is fully started."
     ),
-    epilog=_examples_epilog("talonbox screenshot experiment /tmp/talon.png"),
+    epilog=_examples_epilog(
+        "talonbox screenshot experiment /tmp/talon.png",
+        "talonbox screenshot --screencapture experiment /tmp/talon-first-run.png",
+    ),
+)
+@click.option(
+    "--screencapture",
+    is_flag=True,
+    help="Use macOS screencapture over SSH instead of Talon's screen capture API.",
 )
 @click.argument("name", metavar="NAME")
 @click.argument(
     "filepath", metavar="HOST_PATH", type=click.Path(dir_okay=False, path_type=Path)
 )
 @pass_settings
-def screenshot(settings: CliSettings, name: str, filepath: Path) -> None:
-    _build_talon_client(settings, name).capture_screenshot(filepath)
+def screenshot(
+    settings: CliSettings, screencapture: bool, name: str, filepath: Path
+) -> None:
+    _build_talon_client(settings, name).capture_screenshot(
+        filepath,
+        screencapture=screencapture,
+    )
 
 
 def main() -> int:

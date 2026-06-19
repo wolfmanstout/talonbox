@@ -381,7 +381,7 @@ class VmController:
         except lume.LumeError as error:
             raise click.ClickException(str(error)) from None
 
-    def start(self) -> RunningVm:
+    def start(self, *, require_talon: bool = True) -> RunningVm:
         info = self.get_vm()
         launch = None
         try:
@@ -404,7 +404,8 @@ class VmController:
             running_vm = self._running_vm_from_info(ready_info)
             running_vm.probe_ssh(timeout=SSH_TIMEOUT_SECONDS)
             running_vm.prevent_idle_lock()
-            running_vm.ensure_talon_running()
+            if require_talon:
+                running_vm.ensure_talon_running()
         except click.ClickException:
             raise
         except lume.LumeError as error:
