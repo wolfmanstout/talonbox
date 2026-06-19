@@ -79,10 +79,19 @@ def test_create_command_prints_default_url_instructions() -> None:
     )
     assert "https://cua.ai/docs/lume/guide/getting-started/quickstart" in result.output
     assert (
+        "This example keeps `tahoe-base` as a clean Lume base VM outside talonbox"
+        in result.output
+    )
+    assert (
         "lume create tahoe-base --os macos --ipsw latest --unattended tahoe --disk-size 100GB"
         in result.output
     )
-    assert "lume clone tahoe-base experiment" in result.output
+    assert (
+        "Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands."
+        in result.output
+    )
+    assert "lume clone tahoe-base talonbox-experiment" in result.output
+    assert "lume run talonbox-experiment" in result.output
     assert (
         "talonbox exec experiment -- curl -L -o /tmp/talon.dmg https://talonvoice.com/dl/latest/talon-mac.dmg"
         in result.output

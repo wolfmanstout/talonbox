@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import click
 
+from .names import to_lume_vm_name
 from .smoke_test import SmokeTestRunner
 from .talon_client import TalonClient
 from .transfer import TransferService
@@ -107,6 +108,7 @@ def _is_url(value: str) -> bool:
 
 def _render_create_markdown(name: str, talon_dmg: str) -> str:
     quoted_name = shlex.quote(name)
+    quoted_lume_name = shlex.quote(to_lume_vm_name(name))
     quoted_talon_dmg = shlex.quote(talon_dmg)
     talon_dmg_setup = (
         f"```bash\n"
@@ -142,6 +144,8 @@ https://cua.ai/docs/lume/guide/getting-started/quickstart
 
 Unattended install is highly recommended. A 100 GB disk is recommended so the VM has enough room for macOS upgrades.
 
+This example keeps `tahoe-base` as a clean Lume base VM outside talonbox, which makes it quicker to create additional talonbox VMs later.
+
 ```bash
 lume create tahoe-base --os macos --ipsw latest --unattended tahoe --disk-size 100GB
 ```
@@ -150,11 +154,11 @@ This usually takes about 20 minutes.
 
 ## 3. Clone and start `{name}`
 
-After the base VM is complete, create the Talon VM from it:
+After the base VM is complete, create the Talon VM from it. Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands.
 
 ```bash
-lume clone tahoe-base {quoted_name}
-lume run {quoted_name}
+lume clone tahoe-base {quoted_lume_name}
+lume run {quoted_lume_name}
 ```
 
 ## 4. Install Talon
