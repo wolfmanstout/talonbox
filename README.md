@@ -50,6 +50,12 @@ downloaded beta DMG on this machine.
 
 `create` prints setup instructions for a human or agent to follow. Setup
 requires human decisions, GUI permission prompts, and Talon EULA acceptance.
+Expect the first golden VM setup to be time-consuming and somewhat
+error-prone: macOS setup screens, Lume automation, Talon first-run prompts, and
+privacy permissions all need to line up. That setup friction is worth getting
+through, and it is not representative of the normal talonbox experience. Once a
+golden VM passes `smoke-test`, cloning it for future Talon experiments should
+feel fast, disposable, and a little bit magical.
 
 For top-level help, run:
 
@@ -65,6 +71,7 @@ talonbox start experiment
 talonbox rsync -a ~/.talon/user/ experiment:/Users/lume/.talon/user/
 talonbox mimic experiment "focus chrome"
 talonbox screenshot experiment /tmp/talon.png
+talonbox open experiment
 talonbox stop experiment
 ```
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,7 @@ HELP_COMMAND_GROUPS = (
             "delete",
             "list",
             "status",
+            "open",
             "start",
             "stop",
             "smoke-test",
@@ -229,11 +231,11 @@ If Talon is blocked on first-run UI before its REPL is available, request a plai
 talonbox screenshot --screencapture {quoted_name} /tmp/talon-first-run.png
 ```
 
-Get the VNC URL and open it with the Mac Screen Sharing app:
+Open the VM with the Mac Screen Sharing app:
 
 ```bash
 talonbox status {quoted_name}
-open "$(talonbox status {quoted_name} | awk '/^vnc:/ {{print $2}}')"
+talonbox open {quoted_name}
 ```
 
 Accept the Talon EULA yourself in the GUI. Agents must never try to accept the Talon EULA for you.
@@ -242,18 +244,38 @@ Accept the Talon EULA yourself in the GUI. Agents must never try to accept the T
 
 Open System Settings in the VM and go to Privacy & Security.
 
-Because talonbox runs Talon via Terminal, grant permissions to Terminal, not to the Talon app:
+Because talonbox launches Talon through Terminal, grant permissions to both Terminal and Talon wherever macOS offers both:
 
 - Accessibility
 - Camera
+- Microphone
+- Screen & System Audio Recording, or any screen access prompt macOS shows
 
-From the Talon menu, select the speech model you want to use. You do not need to set a microphone.
+macOS may require restarting Terminal or Talon after granting some permissions.
+
+From the Talon menu, select the speech model you want to use. You do not need to configure a microphone, though macOS may still ask you to grant microphone permission.
 
 Install any other apps you expect to test Talon with.
 
-## 7. Reboot and stop the VM
+## 7. Run the setup smoke test
 
-When setup is complete, quit all apps and restart the VM. When macOS asks, uncheck the box to reopen windows after logging back in.
+Before the final restart, run the smoke test directly against this setup VM. This intentionally avoids a clone so the test can trigger any remaining Talon or macOS permission prompts in the VM you are preparing.
+
+```bash
+talonbox smoke-test --in-place {quoted_name}
+```
+
+If the smoke test fails or appears blocked on a GUI prompt, open VNC and inspect the VM manually:
+
+```bash
+talonbox open {quoted_name}
+```
+
+Repeat the permission or prompt handling until `talonbox smoke-test --in-place {quoted_name}` passes.
+
+## 8. Reboot and stop the VM
+
+When the setup smoke test passes, quit all apps and restart the VM. When macOS asks, uncheck the box to reopen windows after logging back in.
 
 After the VM has restarted and you are done with setup, stop it:
 
@@ -261,9 +283,9 @@ After the VM has restarted and you are done with setup, stop it:
 talonbox stop {quoted_name}
 ```
 
-## 8. Smoke test the finished VM
+## 9. Smoke test the finished VM
 
-Confirm the installation with:
+Confirm the stopped golden VM through a temporary clone:
 
 ```bash
 talonbox smoke-test {quoted_name}
@@ -290,6 +312,7 @@ talonbox smoke-test {quoted_name}
         "talonbox mimic experiment 'focus chrome'",
         "talonbox screenshot experiment /tmp/talon.png",
         "talonbox smoke-test golden",
+        "talonbox open experiment",
     ),
 )
 @click.option(
@@ -405,6 +428,29 @@ def status(settings: CliSettings, name: str) -> None:
 
 
 @cli.command(
+    name="open",
+    short_help="Open the VM's VNC session.",
+    help=(
+        "Open the VM's VNC session in the macOS Screen Sharing app.\n\n"
+        "The VM must be running and Lume must report a VNC URL. This is useful when "
+        "Talon or macOS is waiting on GUI prompts, permissions, or first-run setup."
+    ),
+    epilog=_examples_epilog("talonbox open experiment"),
+)
+@click.argument("name", metavar="NAME")
+@pass_settings
+def open_command(settings: CliSettings, name: str) -> None:
+    vm_controller = VmController(name, settings.debug)
+    info = vm_controller.get_vm()
+    if info.status != "running" or not info.vnc_url:
+        raise click.ClickException(f"VM has no openable VNC URL: {name}")
+    click.echo(info.vnc_url)
+    result = subprocess.run(["open", info.vnc_url], check=False)
+    if result.returncode:
+        raise click.exceptions.Exit(result.returncode)
+
+
+@cli.command(
     short_help="Start or resume an existing VM.",
     help=(
         "Start or resume an existing VM in the background, wait for SSH, and start "
@@ -463,20 +509,31 @@ def stop(settings: CliSettings, name: str) -> None:
 
 @cli.command(
     name="smoke-test",
-    short_help="Run a diagnostic against a temporary clone.",
+    short_help="Run a Talon VM diagnostic.",
     help=(
         "Run a mutating end-to-end sanity check against a temporary clone of SOURCE.\n\n"
         "The source VM must be stopped. smoke-test clones it, starts the clone, uploads a "
         "temporary Talon command bundle, runs mimic(), verifies a guest-side marker file, "
         "captures screenshots, and then stops and deletes the clone.\n\n"
+        "Use `--in-place` only while creating or repairing a VM. It runs the same "
+        "diagnostic directly against SOURCE, leaves the VM running for GUI prompts, and "
+        "does not clone, stop, or delete the VM.\n\n"
         "Artifacts are kept under `/tmp` for debugging."
     ),
-    epilog=_examples_epilog("talonbox smoke-test golden"),
+    epilog=_examples_epilog(
+        "talonbox smoke-test golden",
+        "talonbox smoke-test --in-place golden",
+    ),
+)
+@click.option(
+    "--in-place",
+    is_flag=True,
+    help="Run directly against SOURCE for setup/repair instead of using a temporary clone.",
 )
 @click.argument("source", metavar="SOURCE")
 @pass_settings
-def smoke_test(settings: CliSettings, source: str) -> None:
-    _build_smoke_test_runner(settings, source).run()
+def smoke_test(settings: CliSettings, in_place: bool, source: str) -> None:
+    _build_smoke_test_runner(settings, source).run(clone=not in_place)
 
 
 @cli.command(

@@ -589,6 +589,35 @@ def test_running_vm_run_repl_retries_transient_ssh_failure(
     assert attempts["count"] == 2
 
 
+def test_running_vm_run_repl_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running_vm = running_vm_fixture()
+
+    def fake_run(
+        cmd: list[str],
+        *,
+        check: bool,
+        text: bool,
+        capture_output: bool,
+        timeout: float | None,
+        stdin: object | None = None,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, text, capture_output, stdin, input
+        raise subprocess.TimeoutExpired(
+            cmd=cmd,
+            timeout=timeout or 0,
+        )
+
+    monkeypatch.setattr("talonbox.vm.subprocess.run", fake_run)
+
+    result = running_vm.run_repl("print('ok')\n")
+
+    assert result.returncode == 124
+    assert "Command timed out after 30 seconds" in result.stderr
+
+
 def test_running_vm_download_retries_transient_ssh_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -38,6 +38,7 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "delete" in result.output
     assert "list" in result.output
     assert "status" in result.output
+    assert "open" in result.output
     assert "Guest shell:" in result.output
     assert "Talon RPC:" in result.output
     assert "talonbox clone golden experiment" in result.output
@@ -120,13 +121,12 @@ def test_create_command_prints_default_url_instructions() -> None:
         in result.output
     )
     assert "talonbox status experiment" in result.output
-    assert (
-        "open \"$(talonbox status experiment | awk '/^vnc:/ {print $2}')\""
-        in result.output
-    )
+    assert "talonbox open experiment" in result.output
     assert "Agents must never try to accept the Talon EULA for you." in result.output
-    assert "grant permissions to Terminal, not to the Talon app" in result.output
-    assert "You do not need to set a microphone." in result.output
+    assert "grant permissions to both Terminal and Talon" in result.output
+    assert "Microphone" in result.output
+    assert "Screen & System Audio Recording" in result.output
+    assert "talonbox smoke-test --in-place experiment" in result.output
     assert "uncheck the box to reopen windows" in result.output
     assert "talonbox stop experiment" in result.output
     assert "talonbox smoke-test experiment" in result.output
@@ -237,6 +237,8 @@ def test_smoke_test_help_mentions_clone_and_artifacts() -> None:
     assert result.exit_code == 0
     assert "temporary clone of SOURCE" in result.output
     assert "source VM must be stopped" in result.output
+    assert "--in-place" in result.output
+    assert "leaves the VM running for GUI prompts" in result.output
     assert "Artifacts are kept under `/tmp`" in result.output
 
 
@@ -345,6 +347,33 @@ def test_status_command_delegates_to_vm_controller(
     assert result.output == "name: experiment\nstatus: running\n"
 
 
+def test_open_command_opens_vnc_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "get_vm",
+        lambda self: VmInfo(
+            self.vm,
+            "running",
+            "192.168.64.10",
+            "vnc://127.0.0.1:5901",
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module.subprocess,
+        "run",
+        lambda cmd, check=False: calls.append(cmd)
+        or subprocess.CompletedProcess(cmd, 0),
+    )
+
+    result = runner.invoke(cli, ["open", "experiment"])
+
+    assert result.exit_code == 0
+    assert result.output == "vnc://127.0.0.1:5901\n"
+    assert calls == [["open", "vnc://127.0.0.1:5901"]]
+
+
 def test_screenshot_command_uses_talon_capture_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -419,8 +448,8 @@ def test_smoke_test_command_passes_source_to_runner(
     calls: list[str] = []
 
     class FakeRunner:
-        def run(self) -> None:
-            calls.append("run")
+        def run(self, *, clone: bool = True) -> None:
+            calls.append(f"run:{clone}")
 
     def fake_build_runner(settings: object, source: str) -> FakeRunner:
         calls.append(source)
@@ -431,7 +460,29 @@ def test_smoke_test_command_passes_source_to_runner(
     result = runner.invoke(cli, ["smoke-test", "golden"])
 
     assert result.exit_code == 0
-    assert calls == ["golden", "run"]
+    assert calls == ["golden", "run:True"]
+
+
+def test_smoke_test_command_can_run_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[str] = []
+
+    class FakeRunner:
+        def run(self, *, clone: bool = True) -> None:
+            calls.append(f"run:{clone}")
+
+    def fake_build_runner(settings: object, source: str) -> FakeRunner:
+        calls.append(source)
+        return FakeRunner()
+
+    monkeypatch.setattr(cli_module, "_build_smoke_test_runner", fake_build_runner)
+
+    result = runner.invoke(cli, ["smoke-test", "--in-place", "golden"])
+
+    assert result.exit_code == 0
+    assert calls == ["golden", "run:False"]
 
 
 def test_cli_rejects_non_macos_before_running_commands(

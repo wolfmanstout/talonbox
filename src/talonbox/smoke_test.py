@@ -23,9 +23,12 @@ class SmokeTestRunner:
         self.vm_controller = vm_controller
         self.host_output_root = host_output_root
         self._hint_screenshot: Callable[[], Path | None] | None = None
+        self._hint_vm_controller: VmController | None = None
 
     def run(
         self,
+        *,
+        clone: bool = True,
     ) -> None:
         artifact_dir = self.host_output_root / f"talonbox-smoke-test-{uuid.uuid4().hex}"
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -37,7 +40,9 @@ class SmokeTestRunner:
         started = False
         cloned = False
         temp_vm_name = f"smoke-test-{uuid.uuid4().hex}"
-        temp_vm_controller = self.vm_controller.for_vm(temp_vm_name)
+        smoke_vm_controller = (
+            self.vm_controller.for_vm(temp_vm_name) if clone else self.vm_controller
+        )
 
         def hint_screenshot() -> Path | None:
             if screenshot_path.exists():
@@ -47,31 +52,33 @@ class SmokeTestRunner:
             return None
 
         self._hint_screenshot = hint_screenshot
+        self._hint_vm_controller = smoke_vm_controller
         self.log("ARTIFACT", artifact_dir)
 
         try:
             info = self.run_step(
-                "Inspect source VM status",
+                "Inspect VM status",
                 self.vm_controller.get_vm,
-                success_message="Source VM status checked.",
+                success_message="VM status checked.",
             )
             assert isinstance(info, lume.VmInfo)
-            if info.status != "stopped":
+            if clone and info.status != "stopped":
                 raise click.ClickException(
                     f"Source VM must be stopped before smoke-test: {self.vm_controller.vm} ({info.status})"
                 )
 
-            self.run_step(
-                "Clone the source VM for smoke-test",
-                lambda: self.vm_controller.clone(temp_vm_name),
-                success_message=f"Temporary VM cloned: {temp_vm_name}",
-            )
-            cloned = True
+            if clone:
+                self.run_step(
+                    "Clone the source VM for smoke-test",
+                    lambda: self.vm_controller.clone(temp_vm_name),
+                    success_message=f"Temporary VM cloned: {temp_vm_name}",
+                )
+                cloned = True
 
             running_vm = self.run_step(
-                "Start the smoke-test VM",
-                temp_vm_controller.start,
-                success_message="Smoke-test VM started.",
+                "Start the smoke-test VM" if clone else "Start the VM",
+                smoke_vm_controller.start,
+                success_message="Smoke-test VM started." if clone else "VM started.",
             )
             assert isinstance(running_vm, RunningVm)
             started = True
@@ -90,7 +97,7 @@ class SmokeTestRunner:
             )
             self.run_step(
                 "Restart Talon to load the uploaded bundle",
-                lambda: temp_vm_controller.restart_talon(
+                lambda: smoke_vm_controller.restart_talon(
                     wipe_user_dir=False,
                     clean_logs=True,
                 ),
@@ -144,16 +151,17 @@ class SmokeTestRunner:
             raise
         finally:
             self._hint_screenshot = None
-            if started:
+            self._hint_vm_controller = None
+            if clone and started:
                 self.run_step(
                     "Stop the smoke-test VM",
-                    temp_vm_controller.stop,
+                    smoke_vm_controller.stop,
                     success_message="Smoke-test VM stopped.",
                 )
             if cloned:
                 self.run_step(
                     "Delete the smoke-test VM",
-                    temp_vm_controller.delete,
+                    smoke_vm_controller.delete,
                     success_message="Smoke-test VM deleted.",
                 )
 
@@ -295,5 +303,15 @@ class SmokeTestRunner:
         click.echo(
             "HINT inspect guest logs at ~/.talon/talon.log and /tmp/talonbox-talon.log."
         )
+        if self._hint_vm_controller is not None:
+            try:
+                info = self._hint_vm_controller.get_vm()
+            except click.ClickException:
+                info = None
+            if info is not None and info.status == "running" and info.vnc_url:
+                click.echo(
+                    f"HINT open the VM over VNC with `talonbox open {self._hint_vm_controller.vm}`."
+                )
+                click.echo(f"HINT or run `open {shlex.quote(info.vnc_url)}`.")
         if screenshot_path is not None:
             click.echo(f"HINT inspect the saved screenshot at {screenshot_path}.")

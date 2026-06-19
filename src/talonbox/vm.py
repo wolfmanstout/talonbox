@@ -17,6 +17,7 @@ START_TIMEOUT_SECONDS = 180.0
 SSH_TIMEOUT_SECONDS = 60.0
 TALON_TIMEOUT_SECONDS = 30.0
 TALON_REPL_TIMEOUT_SECONDS = 30.0
+TALON_REPL_COMMAND_TIMEOUT_SECONDS = 30.0
 TALON_POST_RESTART_SETTLE_SECONDS = 3.0
 TRANSIENT_RETRY_DELAY_SECONDS = 1.0
 TRANSIENT_RETRY_ATTEMPTS = 2
@@ -33,6 +34,14 @@ class RemoteCommandError(TransportError):
 
 def _process_output(result: subprocess.CompletedProcess[str]) -> str:
     return (result.stderr or "").strip() or (result.stdout or "").strip()
+
+
+def _timeout_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value
 
 
 class RunningVm:
@@ -114,6 +123,7 @@ class RunningVm:
         result = self._run_transport_command(
             [*self._ssh_command_prefix(), 'sh -lc "$HOME/.talon/bin/repl"'],
             input_text=payload,
+            timeout=TALON_REPL_COMMAND_TIMEOUT_SECONDS,
         )
         if stream_output or result.returncode != 0:
             if result.stdout:
@@ -246,15 +256,24 @@ class RunningVm:
         deadline = time.monotonic() + timeout if poll and timeout is not None else None
         attempts = 0
         while True:
-            result = subprocess.run(
-                cmd,
-                check=False,
-                text=True,
-                capture_output=not stream,
-                timeout=None if poll else timeout,
-                stdin=None if input_text is not None else subprocess.DEVNULL,
-                input=input_text,
-            )
+            try:
+                result = subprocess.run(
+                    cmd,
+                    check=False,
+                    text=True,
+                    capture_output=not stream,
+                    timeout=None if poll else timeout,
+                    stdin=None if input_text is not None else subprocess.DEVNULL,
+                    input=input_text,
+                )
+            except subprocess.TimeoutExpired as error:
+                return subprocess.CompletedProcess(
+                    cmd,
+                    124,
+                    _timeout_output(error.stdout),
+                    _timeout_output(error.stderr)
+                    or f"Command timed out after {timeout:.0f} seconds",
+                )
             if result.returncode == 0 or not poll:
                 if result.returncode == 0:
                     return result

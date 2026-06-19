@@ -214,6 +214,111 @@ def test_smoke_test_runner_success_runs_end_to_end(
     assert (artifact_dir / "bundle" / "talonbox_smoke_test.talon").exists()
 
 
+def test_smoke_test_runner_can_run_in_place_without_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller, host_output_root=tmp_path.resolve())
+    steps: list[str] = []
+    running_vm = running_vm_fixture()
+    transfer_service = TransferService(running_vm)
+
+    monkeypatch.setattr(
+        vm_controller,
+        "get_vm",
+        lambda: VmInfo("talon-test", "running", "192.168.64.10"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "for_vm",
+        lambda name: pytest.fail("in-place smoke test should not create a temp VM"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "clone",
+        lambda dest: pytest.fail("in-place smoke test should not clone"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "start",
+        lambda: steps.append("start") or running_vm,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_build_transfer_service",
+        lambda running_vm_arg: transfer_service,
+    )
+    monkeypatch.setattr(
+        transfer_service,
+        "rsync",
+        lambda args: steps.append(f"rsync:{args[0]}") or 0,
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "restart_talon",
+        lambda *, wipe_user_dir, clean_logs: steps.append(
+            f"restart:{wipe_user_dir}:{clean_logs}"
+        ),
+    )
+
+    class FakeClient:
+        def mimic(self, command: str) -> None:
+            steps.append(f"mimic:{command}")
+
+        def capture_screenshot(self, path: Path) -> None:
+            steps.append(f"capture:{path.name}")
+            path.write_bytes(b"\x89PNG\r\n\x1a\npayload")
+
+    monkeypatch.setattr(
+        runner,
+        "_build_talon_client",
+        lambda running_vm_arg, transfer_service_arg: FakeClient(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "verify_marker",
+        lambda running_vm_arg, marker_path, token: steps.append("verify_marker"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "trigger_visual_change",
+        lambda running_vm_arg, token: steps.append("show_dialog"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "verify_screenshots_differ",
+        lambda before, after: steps.append("verify_diff"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "stop",
+        lambda: pytest.fail("in-place smoke test should leave the VM running"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "delete",
+        lambda: pytest.fail("in-place smoke test should not delete the VM"),
+    )
+
+    runner.run(clone=False)
+
+    captured = capsys.readouterr()
+    assert "PASS Smoke test completed successfully." in captured.out
+    assert steps == [
+        "start",
+        "rsync:-a",
+        "restart:False:True",
+        "mimic:talonbox smoke test",
+        "verify_marker",
+        "capture:screenshot-before-dialog.png",
+        "show_dialog",
+        "capture:screenshot-after-dialog.png",
+        "verify_diff",
+    ]
+
+
 def test_smoke_test_runner_failure_after_start_still_stops_vm(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -250,6 +355,11 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
             click.ClickException("talon restart failed")
         ),
     )
+    monkeypatch.setattr(
+        temp_controller,
+        "get_vm",
+        lambda: VmInfo("temp", "running", "192.168.64.10", "vnc://127.0.0.1:5901"),
+    )
     monkeypatch.setattr(temp_controller, "stop", lambda: stop_calls.append("stop"))
     monkeypatch.setattr(temp_controller, "delete", lambda: stop_calls.append("delete"))
 
@@ -266,6 +376,7 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
         "HINT inspect guest logs at ~/.talon/talon.log and /tmp/talonbox-talon.log."
         in captured.out
     )
+    assert "HINT open the VM over VNC with `talonbox open temp`." in captured.out
     assert stop_calls == ["stop", "delete"]
 
 
