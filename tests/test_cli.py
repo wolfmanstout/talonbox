@@ -56,6 +56,68 @@ def test_clone_help_documents_apfs_clone() -> None:
     assert "talonbox clone golden experiment" in result.output
 
 
+def test_create_help_documents_markdown_instruction_behavior() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["create", "--help"])
+
+    assert result.exit_code == 0
+    assert "Print Markdown instructions" in result.output
+    assert "does not create, clone, start, or modify any VM" in result.output
+    assert "talonbox create golden-beta ~/Downloads/talon-beta.dmg" in result.output
+
+
+def test_create_command_prints_default_url_instructions() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["create", "experiment"])
+
+    assert result.exit_code == 0
+    assert result.output.startswith("# Create a talonbox VM: `experiment`")
+    assert (
+        "https://cua.ai/docs/lume/guide/getting-started/installation" in result.output
+    )
+    assert "https://cua.ai/docs/lume/guide/getting-started/quickstart" in result.output
+    assert (
+        "lume create tahoe-base --os macos --ipsw latest --unattended tahoe --disk-size 100GB"
+        in result.output
+    )
+    assert "lume clone tahoe-base experiment" in result.output
+    assert (
+        "talonbox exec experiment -- curl -L -o /tmp/talon.dmg https://talonvoice.com/dl/latest/talon-mac.dmg"
+        in result.output
+    )
+    assert (
+        "talonbox exec experiment -- softwareupdate --install-rosetta --agree-to-license"
+        in result.output
+    )
+    assert "talonbox restart-talon experiment" in result.output
+    assert "talonbox status experiment" in result.output
+    assert (
+        "open \"$(talonbox status experiment | awk '/^vnc:/ {print $2}')\""
+        in result.output
+    )
+    assert "Agents must never try to accept the Talon EULA for you." in result.output
+    assert "grant permissions to Terminal, not to the Talon app" in result.output
+    assert "You do not need to set a microphone." in result.output
+    assert "uncheck the box to reopen windows" in result.output
+    assert "talonbox stop experiment" in result.output
+    assert "talonbox smoke-test experiment" in result.output
+
+
+def test_create_command_prints_local_dmg_copy_instructions() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["create", "experiment", "/tmp/Talon Build.dmg"])
+
+    assert result.exit_code == 0
+    assert (
+        "talonbox scp -q '/tmp/Talon Build.dmg' experiment:/tmp/talon.dmg"
+        in result.output
+    )
+    assert "curl -L -o /tmp/talon.dmg" not in result.output
+
+
 def test_rename_help_documents_requirements() -> None:
     runner = CliRunner()
 

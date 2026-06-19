@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import click
 
@@ -30,6 +32,8 @@ HELP_COMMAND_GROUPS = (
     ("Guest shell", ("exec", "rsync", "scp")),
     ("Talon RPC", ("restart-talon", "repl", "mimic", "screenshot")),
 )
+
+DEFAULT_TALON_DMG_URL = "https://talonvoice.com/dl/latest/talon-mac.dmg"
 
 
 def _examples_epilog(*examples: str) -> str:
@@ -97,6 +101,131 @@ def _build_smoke_test_runner(settings: CliSettings, source: str) -> SmokeTestRun
     return SmokeTestRunner(VmController(source, settings.debug))
 
 
+def _is_url(value: str) -> bool:
+    return urlparse(value).scheme in {"http", "https"}
+
+
+def _render_create_markdown(name: str, talon_dmg: str) -> str:
+    quoted_name = shlex.quote(name)
+    quoted_talon_dmg = shlex.quote(talon_dmg)
+    talon_dmg_setup = (
+        f"```bash\n"
+        f"talonbox exec {quoted_name} -- curl -L -o /tmp/talon.dmg {quoted_talon_dmg}\n"
+        f"```\n"
+        if _is_url(talon_dmg)
+        else f"```bash\n"
+        f"talonbox scp -q {quoted_talon_dmg} {quoted_name}:/tmp/talon.dmg\n"
+        f"```\n"
+    )
+
+    return f"""# Create a talonbox VM: `{name}`
+
+This command prints setup instructions only. Creating a Talon-ready macOS VM requires human decisions, GUI permission prompts, and manual EULA acceptance.
+
+## 1. Install Lume
+
+Ensure `lume` is installed. Follow the Lume installation guide as needed:
+
+https://cua.ai/docs/lume/guide/getting-started/installation
+
+Verify the install:
+
+```bash
+lume --version
+```
+
+## 2. Create a fresh macOS base VM
+
+Follow the Lume quickstart as needed:
+
+https://cua.ai/docs/lume/guide/getting-started/quickstart
+
+Unattended install is highly recommended. A 100 GB disk is recommended so the VM has enough room for macOS upgrades.
+
+```bash
+lume create tahoe-base --os macos --ipsw latest --unattended tahoe --disk-size 100GB
+```
+
+This usually takes about 20 minutes.
+
+## 3. Clone and start `{name}`
+
+After the base VM is complete, create the Talon VM from it:
+
+```bash
+lume clone tahoe-base {quoted_name}
+lume run {quoted_name}
+```
+
+## 4. Install Talon
+
+Use `talonbox exec` for guest commands and `talonbox scp` for file copies.
+
+Install Rosetta:
+
+```bash
+talonbox exec {quoted_name} -- softwareupdate --install-rosetta --agree-to-license
+```
+
+Copy or download the Talon DMG:
+
+{talon_dmg_setup}
+Mount the DMG and copy Talon into `/Applications`:
+
+```bash
+talonbox exec {quoted_name} -- hdiutil attach /tmp/talon.dmg -mountpoint /Volumes/Talon
+talonbox exec {quoted_name} -- cp -R /Volumes/Talon/Talon.app /Applications/
+talonbox exec {quoted_name} -- hdiutil detach /Volumes/Talon
+```
+
+Start Talon through talonbox:
+
+```bash
+talonbox restart-talon {quoted_name}
+```
+
+Get the VNC URL and open it with the Mac Screen Sharing app:
+
+```bash
+talonbox status {quoted_name}
+open "$(talonbox status {quoted_name} | awk '/^vnc:/ {{print $2}}')"
+```
+
+Accept the Talon EULA yourself in the GUI. Agents must never try to accept the Talon EULA for you.
+
+## 5. Grant permissions and choose a speech model
+
+Open System Settings in the VM and go to Privacy & Security.
+
+Because talonbox runs Talon via Terminal, grant permissions to Terminal, not to the Talon app:
+
+- Accessibility
+- Camera
+
+From the Talon menu, select the speech model you want to use. You do not need to set a microphone.
+
+Install any other apps you expect to test Talon with.
+
+## 6. Reboot and stop the VM
+
+When setup is complete, quit all apps and restart the VM. When macOS asks, uncheck the box to reopen windows after logging back in.
+
+After the VM has restarted and you are done with setup, stop it:
+
+```bash
+talonbox stop {quoted_name}
+```
+
+## 7. Smoke test the finished VM
+
+Confirm the installation with:
+
+```bash
+talonbox smoke-test {quoted_name}
+```
+"""
+
+
 @click.group(
     name="talonbox",
     cls=TalonboxGroup,
@@ -132,14 +261,27 @@ def cli(click_ctx: click.Context, debug: bool) -> None:
 
 
 @cli.command(
-    short_help="Create or provision a VM (stub for now).",
-    help="Create or provision a Talon VM.\n\nThis command is reserved for future setup automation.",
-    epilog=_examples_epilog("talonbox create golden"),
+    short_help="Print instructions for creating a Talon VM.",
+    help=(
+        "Print Markdown instructions for creating and provisioning a Talon VM.\n\n"
+        "This command does not create, clone, start, or modify any VM. It fills in the "
+        "VM name and Talon DMG source so a human or coding agent can work through the "
+        "manual setup steps."
+    ),
+    epilog=_examples_epilog(
+        "talonbox create golden",
+        "talonbox create golden-beta ~/Downloads/talon-beta.dmg",
+    ),
 )
 @click.argument("name", metavar="NAME")
-def create(name: str) -> None:
-    del name
-    raise click.ClickException("create is not implemented yet")
+@click.argument(
+    "talon_dmg",
+    required=False,
+    metavar="[TALON_DMG]",
+    default=DEFAULT_TALON_DMG_URL,
+)
+def create(name: str, talon_dmg: str) -> None:
+    click.echo(_render_create_markdown(name, talon_dmg))
 
 
 @cli.command(
