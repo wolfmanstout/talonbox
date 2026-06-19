@@ -119,6 +119,8 @@ def test_talon_client_screenshot_uses_talon_capture_and_download(
     talon_client.capture_screenshot(target)
 
     assert target.parent.exists()
+    assert repl_payloads[0].startswith("exec(")
+    assert repl_payloads[0].endswith(")\n")
     assert "screen.capture_rect(screen.main().rect, retina=False)" in repl_payloads[0]
     assert (
         "img.save(path) if hasattr(img, 'save') else img.write_file(path)"

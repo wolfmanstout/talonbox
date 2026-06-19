@@ -61,18 +61,17 @@ class TalonClient:
                 pass
 
     def _capture_with_talon(self, remote_path: str) -> subprocess.CompletedProcess[str]:
-        return self.running_vm.run_repl(
-            "\n".join(
-                [
-                    "from talon import screen",
-                    f"path = {remote_path!r}",
-                    "img = screen.capture_rect(screen.main().rect, retina=False)",
-                    "img.save(path) if hasattr(img, 'save') else img.write_file(path)",
-                    "print(path)",
-                    "",
-                ]
-            ),
+        code = "\n".join(
+            [
+                "from talon import screen",
+                f"path = {remote_path!r}",
+                "img = screen.capture_rect(screen.main().rect, retina=False)",
+                "img.save(path) if hasattr(img, 'save') else img.write_file(path)",
+                "print(path)",
+                "",
+            ]
         )
+        return self.running_vm.run_repl(f"exec({code!r})\n")
 
     def _capture_with_screencapture(self, remote_path: str, filepath: Path) -> None:
         self.running_vm.run_shell(f"screencapture -x {shlex.quote(remote_path)}")
