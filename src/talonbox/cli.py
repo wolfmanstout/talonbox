@@ -136,6 +136,12 @@ Verify the install:
 lume --version
 ```
 
+Lume's unattended setup flow also requires `sshpass`. Install it with Homebrew if needed:
+
+```bash
+brew install sshpass
+```
+
 ## 2. Create a fresh macOS base VM
 
 Follow the Lume quickstart as needed:

@@ -78,6 +78,8 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert (
         "https://cua.ai/docs/lume/guide/getting-started/installation" in result.output
     )
+    assert "Lume's unattended setup flow also requires `sshpass`" in result.output
+    assert "brew install sshpass" in result.output
     assert "https://cua.ai/docs/lume/guide/getting-started/quickstart" in result.output
     assert (
         "This example keeps `tahoe-base` as a clean Lume base VM outside talonbox"
