@@ -170,20 +170,61 @@ Run Lume's maintained setup preset as a separate step. `--no-display` keeps host
 lume setup tahoe-base --unattended tahoe --debug --no-display
 ```
 
-If setup fails, have the agent inspect the debug directory named in Lume's output. The most useful files are usually the `FAILED` screenshot and its `-ocr.json` companion. To understand what the maintained preset was trying to do, have the agent inspect the installed Lume setup docs and preset:
+If setup fails, have the agent inspect the debug directory named in Lume's output. The most useful files are usually the `FAILED` screenshot and its `-ocr.json` companion. These artifacts are for diagnosis only: when the agent is blocked on a macOS GUI setup screen, it should open the VM over VNC and ask the user to complete the visible setup step.
+
+To understand what the maintained preset was trying to do, have the agent inspect the installed Lume setup docs and preset:
 
 ```bash
 lume get tahoe-base
 lume setup --help
 lume dump-docs
-brew list lume 2>/dev/null | rg 'unattended-presets|tahoe.yml'
+```
+
+`lume setup --help` shows the built-in preset names, but may not print the preset file path. If the agent needs the YAML itself, search near the installed `lume` binary and common package locations:
+
+```bash
+LUME_BIN="$(command -v lume)"
+find "$(dirname "$(realpath "$LUME_BIN")")/.." /Applications /opt/homebrew /usr/local -path '*/unattended-presets/tahoe.yml' -print 2>/dev/null
 ```
 
 The Lume VM user is `lume`, and the default Lume password is `lume`.
 
-Do not patch or edit Lume's unattended setup YAML during talonbox setup. If the maintained preset is stale for the current macOS Setup Assistant, use the YAML contents only to advise the user on which setup steps remain, then run `open` with the VNC URL from `lume get tahoe-base` and let the user finish Setup Assistant manually. Before cloning the base VM, make sure Remote Login is enabled for the `lume` user, the `lume` password is still `lume`, and the VM logs into the desktop automatically. `talonbox restart-talon` launches Talon through Terminal, so a logged-in GUI session is required.
+Do not patch or edit Lume's unattended setup YAML during talonbox setup. If the maintained preset is stale for the current macOS Setup Assistant, use the YAML contents only to advise the user on which setup steps remain. In particular, look for similar labels such as "Set Up Later", "Other Sign-In Options", or "Skip" when Apple Account setup appears.
 
-## 4. Clone and start `{name}`
+If the VM is stopped, start it before opening VNC. Open the VM with the Mac Screen Sharing app, ask the user to finish Setup Assistant manually, and wait for the user to reply before continuing:
+
+```bash
+lume run tahoe-base
+lume get tahoe-base
+open VNC_URL_FROM_LUME_GET
+```
+
+Useful user-facing checklist for manual Setup Assistant recovery:
+
+- Choose English and United States.
+- Set up as a new Mac.
+- Create the local user `lume` with password `lume`.
+- Skip Apple Account sign-in.
+- Accept the macOS terms.
+- Decline optional setup such as Location Services, Screen Time, Analytics, Siri, and FileVault.
+- Reach the desktop and enable Remote Login for the `lume` user in System Settings > General > Sharing.
+
+## 4. Finalize and verify the base VM
+
+After SSH is available, the agent may apply any SSH-only `post_ssh_commands` from the installed Lume preset that did not run because setup was completed manually. Those commands commonly configure auto-login, `/etc/kcpassword`, screen saver and sleep settings, and auto-logout. Read them from the installed `tahoe.yml` before running them. This SSH configuration work can be handled by the agent; GUI Setup Assistant decisions should stay with the user over VNC.
+
+Before cloning the base VM, verify it behaves like a completed unattended setup:
+
+```bash
+lume ssh tahoe-base 'whoami'
+lume ssh tahoe-base 'sysadminctl -autologin status'
+lume ssh tahoe-base 'test -f /etc/kcpassword'
+lume ssh tahoe-base 'open -a Terminal'
+```
+
+Then restart the base VM once and confirm it returns to a logged-in desktop. `talonbox restart-talon` launches Talon through Terminal, so a logged-in GUI session is required.
+
+## 5. Clone and start `{name}`
 
 After the base VM is complete, stop it and create the Talon VM from it. Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands.
 
@@ -195,7 +236,7 @@ talonbox start --no-talon {quoted_name}
 
 `--no-talon` starts the VM and waits for SSH without trying to launch Talon or wait for Talon's REPL. Use it while creating or repairing a VM before Talon is fully installed and accepted.
 
-## 5. Install Talon
+## 6. Install Talon
 
 Use `talonbox exec` for guest commands and `talonbox scp` for file copies.
 
@@ -243,7 +284,7 @@ talonbox open {quoted_name}
 
 Accept the Talon EULA yourself in the GUI. Agents must never try to accept the Talon EULA for you.
 
-## 6. Grant permissions and choose a speech model
+## 7. Grant permissions and choose a speech model
 
 Open System Settings in the VM and go to Privacy & Security.
 
@@ -260,7 +301,24 @@ From the Talon menu, select the speech model you want to use. You do not need to
 
 Install any other apps you expect to test Talon with.
 
-## 7. Run the setup smoke test
+Troubleshooting advice: after Talon is installed and the VM has a logged-in desktop, assume first-run prompts or macOS privacy permissions before chasing lower-level causes.
+
+If you see any of these symptoms during setup, do one quick status/log check at most, then open VNC, ask the user to look for prompts or missing permissions, and wait for the user to reply before continuing:
+
+- `talonbox restart-talon {quoted_name}` times out waiting for Talon's REPL.
+- Talon is running but the REPL socket does not appear.
+- Talon is running, the EULA is accepted, but Talon logs are empty.
+- `talonbox repl` or `talonbox mimic` hangs or times out.
+- SSH-backed commands intermittently report `Operation not permitted`.
+- Smoke test screenshot or visual-change checks fail, especially if screenshots do not change.
+
+Ask the user to check the Talon EULA, select a speech model, and review Privacy & Security for pending prompts or missing permissions for Terminal and Talon. Automation, Screen & System Audio Recording, Accessibility, Microphone, and Camera prompts can all block setup. Restart Talon after permission changes.
+
+```bash
+talonbox open {quoted_name}
+```
+
+## 8. Run the setup smoke test
 
 Before the final restart, run the smoke test directly against this setup VM. This intentionally avoids a clone so the test can trigger any remaining Talon or macOS permission prompts in the VM you are preparing.
 
@@ -268,7 +326,7 @@ Before the final restart, run the smoke test directly against this setup VM. Thi
 talonbox smoke-test --in-place {quoted_name}
 ```
 
-If the smoke test fails or appears blocked on a GUI prompt, open VNC and inspect the VM manually:
+If the smoke test fails or appears blocked on a GUI prompt, open VNC and ask the user to inspect the VM manually. Wait for the user to reply before continuing:
 
 ```bash
 talonbox open {quoted_name}
@@ -276,17 +334,17 @@ talonbox open {quoted_name}
 
 Repeat the permission or prompt handling until `talonbox smoke-test --in-place {quoted_name}` passes.
 
-## 8. Reboot and stop the VM
+## 9. Reboot and stop the VM
 
-When the setup smoke test passes, quit all apps and restart the VM. When macOS asks, uncheck the box to reopen windows after logging back in.
+When the setup smoke test passes, the agent should ask the user to quit all apps and restart the VM from the macOS GUI. The user should uncheck the box to reopen windows after logging back in.
 
-After the VM has restarted and you are done with setup, stop it:
+After the user reports that the VM has restarted and returned to the desktop, the agent should stop it:
 
 ```bash
 talonbox stop {quoted_name}
 ```
 
-## 9. Smoke test the finished VM
+## 10. Smoke test the finished VM
 
 Confirm the stopped golden VM through a temporary clone:
 

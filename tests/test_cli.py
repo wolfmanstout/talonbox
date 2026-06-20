@@ -97,12 +97,30 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "lume ls" not in result.output
     assert "lume list" not in result.output
     assert "lume dump-docs" in result.output
+    assert "may not print the preset file path" in result.output
+    assert "LUME_BIN=" in result.output
+    assert "/Applications /opt/homebrew /usr/local" in result.output
     assert "FAILED` screenshot and its `-ocr.json` companion" in result.output
+    assert "when the agent is blocked on a macOS GUI setup screen" in result.output
+    assert "open the VM over VNC and ask the user" in result.output
+    assert "wait for the user to reply before continuing" in result.output
     assert "Do not patch or edit Lume's unattended setup YAML" in result.output
     assert "use the YAML contents only to advise the user" in result.output
-    assert "run `open` with the VNC URL from `lume get tahoe-base`" in result.output
+    assert "Other Sign-In Options" in result.output
+    assert "lume run tahoe-base" in result.output
+    assert "open VNC_URL_FROM_LUME_GET" in result.output
+    assert "Skip Apple Account sign-in" in result.output
     assert "The Lume VM user is `lume`" in result.output
     assert "the default Lume password is `lume`" in result.output
+    assert "post_ssh_commands" in result.output
+    assert "This SSH configuration work can be handled by the agent" in result.output
+    assert (
+        "GUI Setup Assistant decisions should stay with the user over VNC"
+        in result.output
+    )
+    assert "lume ssh tahoe-base 'sysadminctl -autologin status'" in result.output
+    assert "lume ssh tahoe-base 'test -f /etc/kcpassword'" in result.output
+    assert "returns to a logged-in desktop" in result.output
     assert (
         "Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands."
         in result.output
@@ -134,8 +152,22 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "grant permissions to both Terminal and Talon" in result.output
     assert "Microphone" in result.output
     assert "Screen & System Audio Recording" in result.output
+    assert "Troubleshooting advice" in result.output
+    assert "assume first-run prompts or macOS privacy permissions" in result.output
+    assert "do one quick status/log check at most" in result.output
+    assert "times out waiting for Talon's REPL" in result.output
+    assert "the REPL socket does not appear" in result.output
+    assert "the EULA is accepted, but Talon logs are empty" in result.output
+    assert "`talonbox repl` or `talonbox mimic` hangs or times out" in result.output
+    assert "intermittently report `Operation not permitted`" in result.output
+    assert "screenshots do not change" in result.output
+    assert "select a speech model" in result.output
+    assert "Automation" in result.output
     assert "talonbox smoke-test --in-place experiment" in result.output
+    assert "ask the user to inspect the VM manually" in result.output
     assert "uncheck the box to reopen windows" in result.output
+    assert "the agent should ask the user to quit all apps" in result.output
+    assert "After the user reports that the VM has restarted" in result.output
     assert "talonbox stop experiment" in result.output
     assert "talonbox smoke-test experiment" in result.output
 
