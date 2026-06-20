@@ -11,7 +11,7 @@ import click
 from . import lume
 from .names import to_lume_vm_name, to_public_vm_name, validate_public_vm_name
 
-TALON_BINARY = "/Applications/Talon.app/Contents/MacOS/Talon"
+TALON_APP = "/Applications/Talon.app"
 TALON_LOG = "$HOME/.talon/talon.log"
 START_TIMEOUT_SECONDS = 180.0
 SSH_TIMEOUT_SECONDS = 60.0
@@ -208,13 +208,18 @@ class RunningVm:
             self.run_shell(
                 'find "$HOME/.talon/user" -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
             )
-        script_path = "/tmp/talonbox-launch.command"
-        script_body = f"#!/bin/sh\nexec arch -x86_64 {TALON_BINARY} >/tmp/talonbox-talon.log 2>&1\n"
-        self.run_shell(
-            f"printf %s {shlex.quote(script_body)} > {shlex.quote(script_path)} && "
-            f"chmod +x {shlex.quote(script_path)} && "
-            f"open -a Terminal {shlex.quote(script_path)}"
+        launch_command = (
+            f"open --arch x86_64 -a {shlex.quote(TALON_APP)} "
+            "--stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log"
         )
+        for attempt in range(TRANSIENT_RETRY_ATTEMPTS + 1):
+            try:
+                self.run_shell(launch_command)
+                break
+            except RemoteCommandError:
+                if attempt == TRANSIENT_RETRY_ATTEMPTS:
+                    raise
+                time.sleep(TRANSIENT_RETRY_DELAY_SECONDS)
         self.run_shell(
             "pgrep -x Talon >/dev/null",
             timeout=TALON_TIMEOUT_SECONDS,
@@ -384,6 +389,7 @@ class VmController:
             lume.clone_vm(self.lume_vm, dest_lume_vm, debug=self.debug)
         except lume.LumeError as error:
             raise click.ClickException(str(error)) from None
+        self._warm_cloned_vm(dest)
 
     def rename(self, dest: str) -> None:
         self.clone(dest)
@@ -399,6 +405,23 @@ class VmController:
             lume.delete_vm(self.lume_vm, debug=self.debug)
         except lume.LumeError as error:
             raise click.ClickException(str(error)) from None
+
+    def _warm_cloned_vm(self, dest: str) -> None:
+        clone = self.for_vm(dest)
+        try:
+            # Fresh Tahoe clones can show Apple Account setup on first boot.
+            # Boot once so macOS can settle that clone state, then leave the VM
+            # stopped for callers.
+            clone.start(require_talon=False)
+            clone.stop()
+        except click.ClickException as error:
+            try:
+                clone.stop()
+            except click.ClickException as stop_error:
+                self.debug_log(f"clone warm-up cleanup stop failed: {stop_error}")
+            raise click.ClickException(
+                f"Cloned VM was created, but warm-up failed: {error}"
+            ) from None
 
     def start(self, *, require_talon: bool = True) -> RunningVm:
         info = self.get_vm()

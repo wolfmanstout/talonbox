@@ -143,13 +143,12 @@ def test_create_command_prints_default_url_instructions() -> None:
     )
     assert "talonbox restart-talon experiment" in result.output
     assert (
-        "talonbox screenshot --screencapture experiment /tmp/talon-first-run.png"
-        in result.output
+        "talonbox screenshot --vnc experiment /tmp/talon-first-run.png" in result.output
     )
     assert "talonbox status experiment" in result.output
     assert "talonbox open experiment" in result.output
     assert "Agents must never try to accept the Talon EULA for you." in result.output
-    assert "grant permissions to both Terminal and Talon" in result.output
+    assert "Grant permissions to Talon wherever macOS prompts" in result.output
     assert "Microphone" in result.output
     assert "Screen & System Audio Recording" in result.output
     assert "Troubleshooting advice" in result.output
@@ -255,17 +254,17 @@ def test_mimic_help_works() -> None:
     assert "Send one phrase to the VM's Talon REPL" in result.output
 
 
-def test_screenshot_help_documents_explicit_screencapture_mode() -> None:
+def test_screenshot_help_documents_explicit_vnc_mode() -> None:
     runner = CliRunner()
 
     result = runner.invoke(cli, ["screenshot", "--help"])
 
     assert result.exit_code == 0
-    assert "--screencapture" in result.output
+    assert "--vnc" in result.output
+    assert "--screencapture" not in result.output
     assert "requires Talon's REPL" in result.output
     assert (
-        "talonbox screenshot --screencapture experiment /tmp/talon-first-run.png"
-        in result.output
+        "talonbox screenshot --vnc experiment /tmp/talon-first-run.png" in result.output
     )
 
 
@@ -421,10 +420,8 @@ def test_screenshot_command_uses_talon_capture_by_default(
     calls: list[tuple[str, str, bool]] = []
 
     class FakeClient:
-        def capture_screenshot(
-            self, filepath: Path, *, screencapture: bool = False
-        ) -> None:
-            calls.append(("capture_screenshot", str(filepath), screencapture))
+        def capture_screenshot(self, filepath: Path, *, vnc: bool = False) -> None:
+            calls.append(("capture_screenshot", str(filepath), vnc))
 
     monkeypatch.setattr(
         cli_module, "_build_talon_client", lambda settings, name: FakeClient()
@@ -436,24 +433,22 @@ def test_screenshot_command_uses_talon_capture_by_default(
     assert calls == [("capture_screenshot", "/tmp/screen.png", False)]
 
 
-def test_screenshot_command_can_use_screencapture(
+def test_screenshot_command_can_use_vnc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = CliRunner()
     calls: list[tuple[str, str, bool]] = []
 
     class FakeClient:
-        def capture_screenshot(
-            self, filepath: Path, *, screencapture: bool = False
-        ) -> None:
-            calls.append(("capture_screenshot", str(filepath), screencapture))
+        def capture_screenshot(self, filepath: Path, *, vnc: bool = False) -> None:
+            calls.append(("capture_screenshot", str(filepath), vnc))
 
     monkeypatch.setattr(
         cli_module, "_build_talon_client", lambda settings, name: FakeClient()
     )
 
     result = runner.invoke(
-        cli, ["screenshot", "--screencapture", "experiment", "/tmp/screen.png"]
+        cli, ["screenshot", "--vnc", "experiment", "/tmp/screen.png"]
     )
 
     assert result.exit_code == 0

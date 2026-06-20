@@ -48,10 +48,14 @@ def build_service_stack(
 
 
 def running_vm_fixture(
-    ip_address: str = "192.168.64.10", *, debug: bool = False
+    ip_address: str = "192.168.64.10",
+    *,
+    debug: bool = False,
+    vnc_url: str | None = None,
 ) -> RunningVm:
     return RunningVm(
         name="talon-test",
         ip_address=ip_address,
         debug=debug,
+        vnc_url=vnc_url,
     )

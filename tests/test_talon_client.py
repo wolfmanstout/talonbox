@@ -200,13 +200,25 @@ def test_talon_client_screenshot_requires_talon_repl_by_default(
         talon_client.capture_screenshot(target)
 
 
-def test_talon_client_screenshot_can_use_explicit_screencapture(
+def test_talon_client_screenshot_can_use_explicit_vnc(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _, transfer_service, talon_client = build_service_stack()
-    shell_commands: list[str] = []
-    downloads: list[tuple[str, str, Path]] = []
+    connects: list[tuple[str, str | None]] = []
+    captures: list[Path] = []
     target = tmp_path / "shots" / "screen.png"
+    talon_client.running_vm.vnc_url = "vnc://:secret%20words@127.0.0.1:63414"
+
+    class FakeVncClient:
+        def __enter__(self) -> FakeVncClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def captureScreen(self, path: str) -> None:
+            captures.append(Path(path))
+            Path(path).write_bytes(b"not-a-png")
 
     monkeypatch.setattr(
         transfer_service, "_host_output_root", lambda: tmp_path.resolve()
@@ -214,31 +226,44 @@ def test_talon_client_screenshot_can_use_explicit_screencapture(
     monkeypatch.setattr(
         talon_client.running_vm,
         "wait_for_talon_repl",
-        lambda *, timeout=0: pytest.fail("screencapture should not wait for REPL"),
+        lambda *, timeout=0: pytest.fail("VNC screenshot should not wait for REPL"),
     )
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_shell",
-        lambda command, **kwargs: (
-            shell_commands.append(command) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda command, **kwargs: pytest.fail("VNC screenshot should not use SSH"),
     )
     monkeypatch.setattr(
         talon_client.running_vm,
         "download",
-        lambda remote, local: (
-            downloads.append((talon_client.running_vm.ip_address, remote, local))
-            or local.write_bytes(b"not-a-png")
+        lambda remote, local: pytest.fail("VNC screenshot should not download"),
+    )
+    monkeypatch.setattr(
+        "talonbox.talon_client.vnc_api.connect",
+        lambda server, password=None, timeout=None: (
+            connects.append((server, password)) or FakeVncClient()
         ),
     )
 
-    talon_client.capture_screenshot(target, screencapture=True)
+    talon_client.capture_screenshot(target, vnc=True)
 
     assert target.parent.exists()
-    assert shell_commands[0].startswith("screencapture -x /tmp/talonbox-screenshot-")
-    assert shell_commands[1].startswith('rm -f "/tmp/talonbox-screenshot-')
-    assert downloads[0][0] == "192.168.64.10"
-    assert downloads[0][2] == target
+    assert connects == [("127.0.0.1::63414", "secret words")]
+    assert captures == [target]
+
+
+def test_talon_client_vnc_screenshot_requires_vnc_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, transfer_service, talon_client = build_service_stack()
+    target = tmp_path / "shots" / "screen.png"
+
+    monkeypatch.setattr(
+        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
+    )
+
+    with pytest.raises(click.ClickException, match="does not expose a VNC URL"):
+        talon_client.capture_screenshot(target, vnc=True)
 
 
 def test_talon_client_screenshot_rejects_output_outside_tmp() -> None:

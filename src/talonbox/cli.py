@@ -222,7 +222,7 @@ lume ssh tahoe-base 'test -f /etc/kcpassword'
 lume ssh tahoe-base 'open -a Terminal'
 ```
 
-Then restart the base VM once and confirm it returns to a logged-in desktop. `talonbox restart-talon` launches Talon through Terminal, so a logged-in GUI session is required.
+Then restart the base VM once and confirm it returns to a logged-in desktop. `talonbox restart-talon` launches Talon in the logged-in GUI session, so that session must be available.
 
 ## 5. Clone and start `{name}`
 
@@ -269,10 +269,10 @@ Start Talon through talonbox:
 talonbox restart-talon {quoted_name}
 ```
 
-If Talon is blocked on first-run UI before its REPL is available, request a plain macOS screenshot explicitly:
+If Talon is blocked on first-run UI before its REPL is available, request a VNC framebuffer screenshot explicitly:
 
 ```bash
-talonbox screenshot --screencapture {quoted_name} /tmp/talon-first-run.png
+talonbox screenshot --vnc {quoted_name} /tmp/talon-first-run.png
 ```
 
 Open the VM with the Mac Screen Sharing app:
@@ -288,14 +288,14 @@ Accept the Talon EULA yourself in the GUI. Agents must never try to accept the T
 
 Open System Settings in the VM and go to Privacy & Security.
 
-Because talonbox launches Talon through Terminal, grant permissions to both Terminal and Talon wherever macOS offers both:
+Grant permissions to Talon wherever macOS prompts for them:
 
 - Accessibility
 - Camera
 - Microphone
 - Screen & System Audio Recording, or any screen access prompt macOS shows
 
-macOS may require restarting Terminal or Talon after granting some permissions.
+macOS may require restarting Talon after granting some permissions.
 
 From the Talon menu, select the speech model you want to use. You do not need to configure a microphone, though macOS may still ask you to grant microphone permission.
 
@@ -544,7 +544,7 @@ def start(settings: CliSettings, name: str, no_talon: bool) -> None:
     help=(
         "Restart Talon inside the running VM without rebooting the VM.\n\n"
         "This truncates `~/.talon/talon.log` and `/tmp/talonbox-talon.log`, then relaunches "
-        "Talon under Rosetta through Terminal so screen capture permissions still apply."
+        "Talon under Rosetta in the logged-in GUI session."
     ),
     epilog=_examples_epilog("talonbox restart-talon experiment"),
 )
@@ -733,29 +733,28 @@ def mimic(settings: CliSettings, name: str, command: str) -> None:
         "Capture a VM screenshot, save it to a guest temp file, download it to a host "
         "path under `/tmp`, and remove the guest temp file.\n\n"
         "By default this uses Talon's screen capture API and requires Talon's REPL. Use "
-        "`--screencapture` before Talon is fully started."
+        "`--vnc` to capture the VNC framebuffer instead."
     ),
     epilog=_examples_epilog(
         "talonbox screenshot experiment /tmp/talon.png",
-        "talonbox screenshot --screencapture experiment /tmp/talon-first-run.png",
+        "talonbox screenshot --vnc experiment /tmp/talon-first-run.png",
     ),
 )
 @click.option(
-    "--screencapture",
+    "--vnc",
+    "vnc",
     is_flag=True,
-    help="Use macOS screencapture over SSH instead of Talon's screen capture API.",
+    help="Use the VM's VNC framebuffer instead of Talon's screen capture API.",
 )
 @click.argument("name", metavar="NAME")
 @click.argument(
     "filepath", metavar="HOST_PATH", type=click.Path(dir_okay=False, path_type=Path)
 )
 @pass_settings
-def screenshot(
-    settings: CliSettings, screencapture: bool, name: str, filepath: Path
-) -> None:
+def screenshot(settings: CliSettings, vnc: bool, name: str, filepath: Path) -> None:
     _build_talon_client(settings, name).capture_screenshot(
         filepath,
-        screencapture=screencapture,
+        vnc=vnc,
     )
 
 

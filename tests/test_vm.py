@@ -82,6 +82,19 @@ def test_vm_controller_clone_requires_stopped_source_and_empty_dest(
             ("clone_vm", (source, target))
         ),
     )
+    monkeypatch.setattr(
+        vm_module.VmController,
+        "start",
+        lambda self, require_talon=True: calls.append(
+            ("start", (self.vm, require_talon))
+        )
+        or running_vm_fixture(),
+    )
+    monkeypatch.setattr(
+        vm_module.VmController,
+        "stop",
+        lambda self: calls.append(("stop", self.vm)),
+    )
 
     vm_controller.clone("experiment")
 
@@ -89,6 +102,8 @@ def test_vm_controller_clone_requires_stopped_source_and_empty_dest(
         ("get_vm_info", "talonbox-golden"),
         ("get_vm_info", "talonbox-experiment"),
         ("clone_vm", ("talonbox-golden", "talonbox-experiment")),
+        ("start", ("experiment", False)),
+        ("stop", "experiment"),
     ]
 
 
@@ -132,6 +147,19 @@ def test_vm_controller_rename_clones_then_deletes_source(
         "delete_vm",
         lambda vm, debug=False: calls.append(("delete_vm", vm)),
     )
+    monkeypatch.setattr(
+        vm_module.VmController,
+        "start",
+        lambda self, require_talon=True: calls.append(
+            ("start", (self.vm, require_talon))
+        )
+        or running_vm_fixture(),
+    )
+    monkeypatch.setattr(
+        vm_module.VmController,
+        "stop",
+        lambda self: calls.append(("stop", self.vm)),
+    )
 
     vm_controller.rename("experiment-old")
 
@@ -139,6 +167,8 @@ def test_vm_controller_rename_clones_then_deletes_source(
         ("get_vm_info", "talonbox-experiment"),
         ("get_vm_info", "talonbox-experiment-old"),
         ("clone_vm", ("talonbox-experiment", "talonbox-experiment-old")),
+        ("start", ("experiment-old", False)),
+        ("stop", "experiment-old"),
         ("get_vm_info", "talonbox-experiment"),
         ("delete_vm", "talonbox-experiment"),
     ]
@@ -395,8 +425,45 @@ def test_running_vm_restart_talon_waits_for_repl_and_sleeps(
     )
 
     assert calls[0] == ("192.168.64.10", "pkill -x Talon >/dev/null 2>&1 || true")
+    assert (
+        "192.168.64.10",
+        "open --arch x86_64 -a /Applications/Talon.app --stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log",
+    ) in calls
     assert calls[-1] == ("192.168.64.10", "wait_for_talon_repl")
     assert sleeps == [vm_module.TALON_POST_RESTART_SETTLE_SECONDS]
+
+
+def test_running_vm_restart_talon_retries_transient_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running_vm = running_vm_fixture()
+    launch_command = (
+        "open --arch x86_64 -a /Applications/Talon.app "
+        "--stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log"
+    )
+    launch_attempts = 0
+    sleeps: list[float] = []
+
+    def fake_run_shell(command: str, **kwargs: object) -> subprocess.CompletedProcess:
+        nonlocal launch_attempts
+        del kwargs
+        if command == launch_command:
+            launch_attempts += 1
+            if launch_attempts == 1:
+                raise vm_module.RemoteCommandError("Launch failed")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(running_vm, "run_shell", fake_run_shell)
+    monkeypatch.setattr(running_vm, "wait_for_talon_repl", lambda **kwargs: None)
+    monkeypatch.setattr(vm_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    running_vm.restart_talon(wipe_user_dir=False, clean_logs=False)
+
+    assert launch_attempts == 2
+    assert sleeps == [
+        vm_module.TRANSIENT_RETRY_DELAY_SECONDS,
+        vm_module.TALON_POST_RESTART_SETTLE_SECONDS,
+    ]
 
 
 def test_running_vm_ensure_talon_running_skips_launch_when_running(

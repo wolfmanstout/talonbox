@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-import shlex
 import subprocess
 import uuid
 from pathlib import Path
+from typing import Any, cast
+from urllib.parse import unquote, urlparse
 
 import click
+from vncdotool import api as vnc_api
 
 from .transfer import TransferService
 from .vm import RemoteCommandError, RunningVm, TransportError
+
+VNC_CAPTURE_TIMEOUT_SECONDS = 30.0
 
 
 class TalonClient:
@@ -35,17 +39,16 @@ class TalonClient:
         if result.returncode:
             raise click.exceptions.Exit(result.returncode)
 
-    def capture_screenshot(
-        self, filepath: Path, *, screencapture: bool = False
-    ) -> None:
+    def capture_screenshot(self, filepath: Path, *, vnc: bool = False) -> None:
         filepath = self.transfer_service.normalize_local_output_path(filepath)
         filepath.parent.mkdir(parents=True, exist_ok=True)
+        if vnc:
+            self._capture_with_vnc(filepath)
+            return
+
         suffix = filepath.suffix if filepath.suffix else ".png"
         remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}{suffix}"
         try:
-            if screencapture:
-                self._capture_with_screencapture(remote_path, filepath)
-                return
             self.running_vm.wait_for_talon_repl()
             result = self._capture_with_talon(remote_path)
             if result.returncode:
@@ -104,6 +107,32 @@ class TalonClient:
         )
         return self.running_vm.run_repl(f"exec({code!r})\n")
 
-    def _capture_with_screencapture(self, remote_path: str, filepath: Path) -> None:
-        self.running_vm.run_shell(f"screencapture -x {shlex.quote(remote_path)}")
-        self.running_vm.download(remote_path, filepath)
+    def _capture_with_vnc(self, filepath: Path) -> None:
+        if not self.running_vm.vnc_url:
+            raise click.ClickException("VM does not expose a VNC URL.")
+        server, password = self._parse_vnc_url(self.running_vm.vnc_url)
+        connect = cast(Any, vnc_api.connect)
+        try:
+            with connect(
+                server,
+                password=password,
+                timeout=VNC_CAPTURE_TIMEOUT_SECONDS,
+            ) as client:
+                client.captureScreen(str(filepath))
+        except Exception as error:
+            raise click.ClickException(f"VNC screenshot failed: {error}") from None
+        finally:
+            vnc_api.shutdown()
+
+    def _parse_vnc_url(self, vnc_url: str) -> tuple[str, str | None]:
+        parsed = urlparse(vnc_url)
+        if parsed.scheme != "vnc" or not parsed.hostname:
+            raise click.ClickException(f"Invalid VNC URL for VM: {vnc_url}")
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise click.ClickException(f"Invalid VNC URL for VM: {vnc_url}") from error
+
+        server = parsed.hostname if port is None else f"{parsed.hostname}::{port}"
+        password = unquote(parsed.password) if parsed.password is not None else None
+        return server, password

@@ -9,7 +9,8 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License"
 ]
 dependencies = [
-    "click"
+    "click",
+    "vncdotool>=1.3.0",
 ]
 
 [build-system]
