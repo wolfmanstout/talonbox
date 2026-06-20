@@ -32,8 +32,8 @@ class SmokeTestRunner:
     ) -> None:
         artifact_dir = self.host_output_root / f"talonbox-smoke-test-{uuid.uuid4().hex}"
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        baseline_screenshot_path = artifact_dir / "screenshot-before-dialog.png"
-        screenshot_path = artifact_dir / "screenshot-after-dialog.png"
+        baseline_screenshot_path = artifact_dir / "screenshot-before-visual-change.png"
+        screenshot_path = artifact_dir / "screenshot-after-visual-change.png"
         bundle_dir = artifact_dir / "bundle"
         marker_path = f"/tmp/talonbox-smoke-test-marker-{uuid.uuid4().hex}.txt"
         token = uuid.uuid4().hex
@@ -124,12 +124,12 @@ class SmokeTestRunner:
                 success_message="Baseline screenshot artifact validated.",
             )
             self.run_step(
-                "Trigger a visible guest dialog",
-                lambda: self.trigger_visual_change(running_vm, token),
-                success_message="Guest dialog triggered.",
+                "Trigger a non-modal visible guest change",
+                lambda: self.trigger_visual_change(talon_client),
+                success_message="Visible guest change triggered.",
             )
             self.run_step(
-                "Capture a second screenshot after the guest dialog",
+                "Capture a second screenshot after the guest visual change",
                 lambda: talon_client.capture_screenshot(screenshot_path),
                 success_message="Second screenshot captured.",
             )
@@ -139,11 +139,11 @@ class SmokeTestRunner:
                 success_message="Second screenshot artifact validated.",
             )
             self.run_step(
-                "Verify the screenshots changed after the guest dialog",
+                "Verify the screenshots changed after the guest visual change",
                 lambda: self.verify_screenshots_differ(
                     baseline_screenshot_path, screenshot_path
                 ),
-                success_message="Screenshots changed after the guest dialog.",
+                success_message="Screenshots changed after the guest visual change.",
             )
         except click.ClickException as error:
             self._fail(str(error), screenshot_path=hint_screenshot())
@@ -170,7 +170,16 @@ class SmokeTestRunner:
     def write_bundle(self, bundle_dir: Path, marker_path: str, token: str) -> None:
         bundle_dir.mkdir(parents=True, exist_ok=True)
         (bundle_dir / "talonbox_smoke_test.talon").write_text(
-            "-\ntalonbox smoke test:\n    user.talonbox_smoke_test()\n",
+            "\n".join(
+                [
+                    "-",
+                    "talonbox smoke test:",
+                    "    user.talonbox_smoke_test()",
+                    "talonbox smoke visual test:",
+                    "    user.talonbox_smoke_test_show_visual_marker()",
+                    "",
+                ]
+            ),
             encoding="utf-8",
         )
         (bundle_dir / "talonbox_smoke_test.py").write_text(
@@ -178,15 +187,60 @@ class SmokeTestRunner:
                 [
                     "from pathlib import Path",
                     "",
-                    "from talon import Module",
+                    "from talon import Module, cron, screen",
+                    "from talon.canvas import Canvas",
+                    "from talon.types import Rect",
                     "",
                     "mod = Module()",
+                    "_smoke_canvas = None",
+                    "_smoke_cleanup_job = None",
+                    "",
+                    "",
+                    "def _close_smoke_canvas() -> None:",
+                    "    global _smoke_canvas, _smoke_cleanup_job",
+                    "    if _smoke_cleanup_job is not None:",
+                    "        cron.cancel(_smoke_cleanup_job)",
+                    "        _smoke_cleanup_job = None",
+                    "    if _smoke_canvas is not None:",
+                    "        _smoke_canvas.close()",
+                    "        _smoke_canvas = None",
+                    "",
+                    "",
+                    "def _draw_smoke_marker(canvas) -> None:",
+                    "    rect = canvas.rect",
+                    "    canvas.paint.style = canvas.paint.Style.FILL",
+                    '    canvas.paint.color = "FF00FF"',
+                    "    canvas.draw_rect(rect)",
+                    '    canvas.paint.color = "00FF00"',
+                    "    canvas.draw_rect(",
+                    "        Rect(",
+                    "            rect.x + rect.width * 0.1,",
+                    "            rect.y + rect.height * 0.1,",
+                    "            rect.width * 0.8,",
+                    "            rect.height * 0.8,",
+                    "        )",
+                    "    )",
+                    '    canvas.paint.color = "000000"',
+                    "    canvas.paint.textsize = 48",
+                    f"    canvas.draw_text({('talonbox smoke test ' + token)!r}, rect.x + 80, rect.y + 120)",
                     "",
                     "@mod.action_class",
                     "class Actions:",
                     "    def talonbox_smoke_test() -> None:",
                     '        """Write the talonbox smoke-test marker file."""',
                     f"        Path({marker_path!r}).write_text({token!r}, encoding='utf-8')",
+                    "",
+                    "    def talonbox_smoke_test_show_visual_marker() -> None:",
+                    '        """Show a large Talon canvas marker for screenshot validation."""',
+                    "        global _smoke_canvas, _smoke_cleanup_job",
+                    "        _close_smoke_canvas()",
+                    "        _smoke_canvas = Canvas.from_screen(screen.main())",
+                    "        _smoke_canvas.blocks_mouse = False",
+                    "        _smoke_canvas.focused = False",
+                    "        _smoke_canvas.cursor_visible = True",
+                    '        _smoke_canvas.register("draw", _draw_smoke_marker)',
+                    "        _smoke_canvas.freeze()",
+                    '        _smoke_cleanup_job = cron.after("10s", _close_smoke_canvas)',
                     "",
                 ]
             ),
@@ -236,18 +290,8 @@ class SmokeTestRunner:
                 f"Smoke test screenshot was not a PNG file: {path}"
             )
 
-    def trigger_visual_change(self, running_vm: RunningVm, token: str) -> None:
-        dialog_log = f"/tmp/talonbox-smoke-test-dialog-{token}.log"
-        script = (
-            f'display dialog "talonbox screenshot test {token}" '
-            'buttons {"OK"} default button 1 giving up after 15'
-        )
-        running_vm.run_shell(
-            (
-                f"nohup osascript -e {shlex.quote(script)} "
-                f">{shlex.quote(dialog_log)} 2>&1 & sleep 1"
-            ),
-        )
+    def trigger_visual_change(self, talon_client: TalonClient) -> None:
+        talon_client.mimic("talonbox smoke visual test")
 
     def _build_transfer_service(self, running_vm: RunningVm) -> TransferService:
         return TransferService(running_vm)

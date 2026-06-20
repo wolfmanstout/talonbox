@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import click
@@ -12,46 +11,35 @@ from talonbox.transfer import TransferService
 from tests.helpers import build_service_stack, running_vm_fixture
 
 
-def test_write_smoke_test_bundle_includes_action_docstring(tmp_path: Path) -> None:
+def test_write_smoke_test_bundle_includes_marker_and_visual_actions(
+    tmp_path: Path,
+) -> None:
     vm_controller, _, _ = build_service_stack()
     runner = SmokeTestRunner(vm_controller)
 
     runner.write_bundle(tmp_path, "/tmp/marker.txt", "token")
 
-    assert "user.talonbox_smoke_test()" in (
-        tmp_path / "talonbox_smoke_test.talon"
-    ).read_text(encoding="utf-8")
-    assert '"""Write the talonbox smoke-test marker file."""' in (
-        tmp_path / "talonbox_smoke_test.py"
-    ).read_text(encoding="utf-8")
+    talon_text = (tmp_path / "talonbox_smoke_test.talon").read_text(encoding="utf-8")
+    assert "user.talonbox_smoke_test()" in talon_text
+    assert "user.talonbox_smoke_test_show_visual_marker()" in talon_text
+    python_text = (tmp_path / "talonbox_smoke_test.py").read_text(encoding="utf-8")
+    assert '"""Write the talonbox smoke-test marker file."""' in (python_text)
+    assert "Canvas.from_screen(screen.main())" in python_text
+    assert 'canvas.paint.color = "FF00FF"' in python_text
+    assert 'canvas.paint.color = "00FF00"' in python_text
 
 
-def test_trigger_smoke_test_visual_change_uses_guest_dialog(
+def test_trigger_smoke_test_visual_change_uses_talon_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    vm_controller, _, _ = build_service_stack()
+    vm_controller, _, talon_client = build_service_stack()
     runner = SmokeTestRunner(vm_controller)
-    calls: list[tuple[str, str]] = []
-    running_vm = running_vm_fixture()
-    monkeypatch.setattr(
-        running_vm,
-        "run_shell",
-        lambda command, **kwargs: (
-            calls.append((running_vm.ip_address, command))
-            or subprocess.CompletedProcess([], 0, "", "")
-        ),
-    )
+    calls: list[str] = []
+    monkeypatch.setattr(talon_client, "mimic", lambda command: calls.append(command))
 
-    runner.trigger_visual_change(running_vm, "abc123")
+    runner.trigger_visual_change(talon_client)
 
-    assert calls == [
-        (
-            "192.168.64.10",
-            'nohup osascript -e \'display dialog "talonbox screenshot test abc123" '
-            'buttons {"OK"} default button 1 giving up after 15\' '
-            ">/tmp/talonbox-smoke-test-dialog-abc123.log 2>&1 & sleep 1",
-        )
-    ]
+    assert calls == ["talonbox smoke visual test"]
 
 
 def test_verify_smoke_test_screenshots_differ_rejects_identical_files(
@@ -172,7 +160,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
     monkeypatch.setattr(
         runner,
         "trigger_visual_change",
-        lambda running_vm_arg, token: steps.append("show_dialog"),
+        lambda talon_client_arg: steps.append("show_visual_change"),
     )
     monkeypatch.setattr(
         runner,
@@ -203,9 +191,9 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "restart:False:True",
         "mimic:talonbox smoke test",
         "verify_marker",
-        "capture:screenshot-before-dialog.png",
-        "show_dialog",
-        "capture:screenshot-after-dialog.png",
+        "capture:screenshot-before-visual-change.png",
+        "show_visual_change",
+        "capture:screenshot-after-visual-change.png",
         "verify_diff",
         "stop",
         "delete",
@@ -284,7 +272,7 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
     monkeypatch.setattr(
         runner,
         "trigger_visual_change",
-        lambda running_vm_arg, token: steps.append("show_dialog"),
+        lambda talon_client_arg: steps.append("show_visual_change"),
     )
     monkeypatch.setattr(
         runner,
@@ -312,9 +300,9 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         "restart:False:True",
         "mimic:talonbox smoke test",
         "verify_marker",
-        "capture:screenshot-before-dialog.png",
-        "show_dialog",
-        "capture:screenshot-after-dialog.png",
+        "capture:screenshot-before-visual-change.png",
+        "show_visual_change",
+        "capture:screenshot-after-visual-change.png",
         "verify_diff",
     ]
 
