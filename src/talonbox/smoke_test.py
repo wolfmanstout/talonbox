@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import shlex
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 
 import click
 
@@ -11,6 +13,13 @@ from . import lume
 from .talon_client import TalonClient
 from .transfer import HOST_OUTPUT_ROOT, TransferService
 from .vm import RunningVm, VmController
+
+MARKER_MIMIC_ATTEMPTS = 10
+MARKER_MIMIC_RETRY_DELAY_SECONDS = 1.0
+
+
+class MimicClient(Protocol):
+    def mimic(self, command: str) -> None: ...
 
 
 class SmokeTestRunner:
@@ -104,14 +113,14 @@ class SmokeTestRunner:
                 success_message="Talon restarted after upload.",
             )
             self.run_step(
-                "Run mimic for 'talonbox smoke test'",
-                lambda: talon_client.mimic("talonbox smoke test"),
-                success_message="mimic succeeded.",
-            )
-            self.run_step(
-                "Verify the guest smoke-test marker",
-                lambda: self.verify_marker(running_vm, marker_path, token),
-                success_message="Guest marker verified.",
+                "Run mimic for 'talonbox smoke test' until the marker is verified",
+                lambda: self.run_marker_mimic_until_verified(
+                    talon_client,
+                    running_vm,
+                    marker_path,
+                    token,
+                ),
+                success_message="mimic created the guest marker.",
             )
             self.run_step(
                 "Capture a baseline screenshot",
@@ -277,6 +286,39 @@ class SmokeTestRunner:
             raise click.ClickException(
                 f"Smoke test marker contents did not match expected token: {marker_path}"
             )
+
+    def run_marker_mimic_until_verified(
+        self,
+        talon_client: MimicClient,
+        running_vm: RunningVm,
+        marker_path: str,
+        token: str,
+        *,
+        attempts: int = MARKER_MIMIC_ATTEMPTS,
+        retry_delay: float = MARKER_MIMIC_RETRY_DELAY_SECONDS,
+    ) -> None:
+        last_error: click.ClickException | None = None
+        for attempt in range(1, attempts + 1):
+            talon_client.mimic("talonbox smoke test")
+            try:
+                self.verify_marker(running_vm, marker_path, token)
+            except click.ClickException as error:
+                last_error = error
+                if attempt < attempts:
+                    time.sleep(retry_delay)
+                    continue
+                break
+            else:
+                return
+
+        message = (
+            last_error.message
+            if last_error is not None
+            else f"Smoke test marker was not created: {marker_path}"
+        )
+        raise click.ClickException(
+            f"Smoke test marker was not verified after {attempts} mimic attempts: {message}"
+        )
 
     def validate_screenshot(self, path: Path) -> None:
         if not path.exists():

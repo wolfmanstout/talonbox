@@ -50,6 +50,84 @@ def test_trigger_smoke_test_visual_change_uses_talon_action(
     assert calls == ["talonbox smoke visual test"]
 
 
+def test_run_marker_mimic_until_verified_retries_until_marker_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    running_vm = running_vm_fixture()
+    calls: list[str] = []
+
+    class FakeClient:
+        def mimic(self, command: str) -> None:
+            calls.append(f"mimic:{command}")
+
+    failures_remaining = 1
+
+    def fake_verify_marker(running_vm_arg, marker_path: str, token: str) -> None:
+        nonlocal failures_remaining
+        calls.append(f"verify:{marker_path}:{token}")
+        if failures_remaining:
+            failures_remaining -= 1
+            raise click.ClickException("marker missing")
+
+    monkeypatch.setattr(runner, "verify_marker", fake_verify_marker)
+    monkeypatch.setattr(
+        "talonbox.smoke_test.time.sleep",
+        lambda delay: calls.append(f"sleep:{delay}"),
+    )
+
+    runner.run_marker_mimic_until_verified(
+        FakeClient(), running_vm, "/tmp/marker.txt", "token", retry_delay=0.25
+    )
+
+    assert calls == [
+        "mimic:talonbox smoke test",
+        "verify:/tmp/marker.txt:token",
+        "sleep:0.25",
+        "mimic:talonbox smoke test",
+        "verify:/tmp/marker.txt:token",
+    ]
+
+
+def test_run_marker_mimic_until_verified_fails_after_bounded_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    running_vm = running_vm_fixture()
+    calls: list[str] = []
+
+    class FakeClient:
+        def mimic(self, command: str) -> None:
+            calls.append(command)
+
+    monkeypatch.setattr(
+        runner,
+        "verify_marker",
+        lambda running_vm_arg, marker_path, token: (_ for _ in ()).throw(
+            click.ClickException("marker missing")
+        ),
+    )
+    monkeypatch.setattr("talonbox.smoke_test.time.sleep", lambda delay: None)
+
+    with pytest.raises(click.ClickException, match="after 3 mimic attempts"):
+        runner.run_marker_mimic_until_verified(
+            FakeClient(),
+            running_vm,
+            "/tmp/marker.txt",
+            "token",
+            attempts=3,
+            retry_delay=0,
+        )
+
+    assert calls == [
+        "talonbox smoke test",
+        "talonbox smoke test",
+        "talonbox smoke test",
+    ]
+
+
 def test_verify_smoke_test_screenshots_differ_rejects_identical_files(
     tmp_path: Path,
 ) -> None:
@@ -169,8 +247,10 @@ def test_smoke_test_runner_success_runs_end_to_end(
     )
     monkeypatch.setattr(
         runner,
-        "verify_marker",
-        lambda running_vm_arg, marker_path, token: steps.append("verify_marker"),
+        "run_marker_mimic_until_verified",
+        lambda talon_client_arg, running_vm_arg, marker_path, token: steps.append(
+            "mimic_until_marker"
+        ),
     )
     monkeypatch.setattr(
         runner,
@@ -204,8 +284,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "start",
         "rsync:-a",
         "restart:False:True",
-        "mimic:talonbox smoke test",
-        "verify_marker",
+        "mimic_until_marker",
         "capture:screenshot-before-visual-change.png",
         "show_visual_change",
         "capture:screenshot-after-visual-change.png",
@@ -281,8 +360,10 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
     )
     monkeypatch.setattr(
         runner,
-        "verify_marker",
-        lambda running_vm_arg, marker_path, token: steps.append("verify_marker"),
+        "run_marker_mimic_until_verified",
+        lambda talon_client_arg, running_vm_arg, marker_path, token: steps.append(
+            "mimic_until_marker"
+        ),
     )
     monkeypatch.setattr(
         runner,
@@ -313,8 +394,7 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         "start",
         "rsync:-a",
         "restart:False:True",
-        "mimic:talonbox smoke test",
-        "verify_marker",
+        "mimic_until_marker",
         "capture:screenshot-before-visual-change.png",
         "show_visual_change",
         "capture:screenshot-after-visual-change.png",
@@ -442,7 +522,9 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
         lambda running_vm_arg, transfer_service_arg: FakeClient(),
     )
     monkeypatch.setattr(
-        runner, "verify_marker", lambda running_vm_arg, marker_path, token: None
+        runner,
+        "run_marker_mimic_until_verified",
+        lambda talon_client_arg, running_vm_arg, marker_path, token: None,
     )
     monkeypatch.setattr(temp_controller, "stop", lambda: stop_calls.append("stop"))
     monkeypatch.setattr(temp_controller, "delete", lambda: stop_calls.append("delete"))
