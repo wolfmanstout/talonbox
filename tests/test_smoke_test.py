@@ -11,6 +11,14 @@ from talonbox.transfer import TransferService
 from tests.helpers import build_service_stack, running_vm_fixture
 
 
+@pytest.fixture(autouse=True)
+def forbid_real_lume_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_run_lume(*args: object, **kwargs: object) -> None:
+        pytest.fail("smoke-test unit tests must mock Lume interactions")
+
+    monkeypatch.setattr("talonbox.lume._run_lume", fail_run_lume)
+
+
 def test_write_smoke_test_bundle_includes_marker_and_visual_actions(
     tmp_path: Path,
 ) -> None:
@@ -62,7 +70,14 @@ def test_smoke_test_runner_rejects_running_source_without_mutating_it(
 ) -> None:
     vm_controller, _, _ = build_service_stack()
     runner = SmokeTestRunner(vm_controller)
+    temp_controller = vm_controller.for_vm("temp")
 
+    monkeypatch.setattr(vm_controller, "for_vm", lambda name: temp_controller)
+    monkeypatch.setattr(
+        temp_controller,
+        "get_vm",
+        lambda: VmInfo("temp", "stopped", None),
+    )
     monkeypatch.setattr(
         vm_controller,
         "get_vm",
@@ -324,6 +339,11 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
     )
     temp_controller = vm_controller.for_vm("temp")
     monkeypatch.setattr(vm_controller, "for_vm", lambda name: temp_controller)
+    monkeypatch.setattr(
+        temp_controller,
+        "get_vm",
+        lambda: VmInfo("temp", "stopped", None),
+    )
     monkeypatch.setattr(vm_controller, "clone", lambda dest: None)
     monkeypatch.setattr(
         temp_controller,
@@ -386,6 +406,11 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
     )
     temp_controller = vm_controller.for_vm("temp")
     monkeypatch.setattr(vm_controller, "for_vm", lambda name: temp_controller)
+    monkeypatch.setattr(
+        temp_controller,
+        "get_vm",
+        lambda: VmInfo("temp", "stopped", None),
+    )
     monkeypatch.setattr(vm_controller, "clone", lambda dest: None)
     monkeypatch.setattr(
         temp_controller,
