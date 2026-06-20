@@ -11,6 +11,19 @@ touching the host machine.
 
 ## Installation
 
+Install [Lume](https://github.com/trycua/cua/tree/main/libs/lume) first. See
+the [Lume installation docs](https://docs.trycua.com/docs/lume/installation),
+or use Homebrew:
+
+```bash
+brew install lume
+```
+
+`talonbox` uses Lume to create, clone, start, stop, and inspect macOS VMs. You
+can also use `lume` directly when you need its lower-level VM management CLI.
+[OpenClaw recommends Lume](https://docs.openclaw.ai/install/macos-vm#macos-vm-options)
+for sandboxed macOS VMs on Apple Silicon Macs.
+
 Install with [uv](https://docs.astral.sh/uv/):
 
 ```bash
