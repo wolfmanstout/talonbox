@@ -11,6 +11,10 @@ from talonbox.transfer import TransferService
 from tests.helpers import build_service_stack, running_vm_fixture
 
 
+def write_ppm(path: Path, width: int, height: int, pixels: bytes) -> None:
+    path.write_bytes(f"P6\n{width} {height}\n255\n".encode() + pixels)
+
+
 @pytest.fixture(autouse=True)
 def forbid_real_lume_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_run_lume(*args: object, **kwargs: object) -> None:
@@ -37,17 +41,20 @@ def test_write_smoke_test_bundle_includes_marker_and_visual_actions(
     assert 'canvas.paint.color = "00FF00"' in python_text
 
 
-def test_trigger_smoke_test_visual_change_uses_talon_action(
+def test_trigger_smoke_test_visual_change_calls_talon_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vm_controller, _, talon_client = build_service_stack()
     runner = SmokeTestRunner(vm_controller)
     calls: list[str] = []
-    monkeypatch.setattr(talon_client, "mimic", lambda command: calls.append(command))
+    monkeypatch.setattr(talon_client, "repl", lambda code: calls.append(code))
 
     runner.trigger_visual_change(talon_client)
 
-    assert calls == ["talonbox smoke visual test"]
+    assert calls == [
+        "from talon import actions\n"
+        "actions.user.talonbox_smoke_test_show_visual_marker()"
+    ]
 
 
 def test_run_marker_mimic_until_verified_retries_until_marker_exists(
@@ -128,18 +135,27 @@ def test_run_marker_mimic_until_verified_fails_after_bounded_retries(
     ]
 
 
-def test_verify_smoke_test_screenshots_differ_rejects_identical_files(
-    tmp_path: Path,
-) -> None:
+def test_verify_visual_marker_present_accepts_marker_colors(tmp_path: Path) -> None:
     vm_controller, _, _ = build_service_stack()
     runner = SmokeTestRunner(vm_controller)
-    before = tmp_path / "before.png"
-    after = tmp_path / "after.png"
-    before.write_bytes(b"same")
-    after.write_bytes(b"same")
+    screenshot = tmp_path / "marker.ppm"
+    magenta = bytes([255, 0, 255]) * 60
+    green = bytes([0, 255, 0]) * 60
+    other = bytes([1, 2, 3]) * 280
+    write_ppm(screenshot, 20, 20, magenta + green + other)
 
-    with pytest.raises(click.ClickException, match="did not change"):
-        runner.verify_screenshots_differ(before, after)
+    runner.verify_visual_marker_present(screenshot)
+
+
+def test_verify_visual_marker_present_rejects_unrelated_change(tmp_path: Path) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    screenshot = tmp_path / "icloud.ppm"
+    pixels = bytes([255, 255, 255]) * 399 + bytes([0, 0, 0])
+    write_ppm(screenshot, 20, 20, pixels)
+
+    with pytest.raises(click.ClickException, match="did not contain"):
+        runner.verify_visual_marker_present(screenshot)
 
 
 def test_smoke_test_runner_rejects_running_source_without_mutating_it(
@@ -259,8 +275,8 @@ def test_smoke_test_runner_success_runs_end_to_end(
     )
     monkeypatch.setattr(
         runner,
-        "verify_screenshots_differ",
-        lambda before, after: steps.append("verify_diff"),
+        "verify_visual_marker_present",
+        lambda screenshot: steps.append("verify_visual_marker"),
     )
     monkeypatch.setattr(
         temp_controller,
@@ -288,7 +304,8 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "capture:screenshot-before-visual-change.png",
         "show_visual_change",
         "capture:screenshot-after-visual-change.png",
-        "verify_diff",
+        "capture:screenshot-after-visual-change.ppm",
+        "verify_visual_marker",
         "stop",
         "delete",
     ]
@@ -372,8 +389,8 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
     )
     monkeypatch.setattr(
         runner,
-        "verify_screenshots_differ",
-        lambda before, after: steps.append("verify_diff"),
+        "verify_visual_marker_present",
+        lambda screenshot: steps.append("verify_visual_marker"),
     )
     monkeypatch.setattr(
         vm_controller,
@@ -398,7 +415,8 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         "capture:screenshot-before-visual-change.png",
         "show_visual_change",
         "capture:screenshot-after-visual-change.png",
-        "verify_diff",
+        "capture:screenshot-after-visual-change.ppm",
+        "verify_visual_marker",
     ]
 
 

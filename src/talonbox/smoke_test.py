@@ -16,6 +16,9 @@ from .vm import RunningVm, VmController
 
 MARKER_MIMIC_ATTEMPTS = 10
 MARKER_MIMIC_RETRY_DELAY_SECONDS = 1.0
+SMOKE_MARKER_MAGENTA = (255, 0, 255)
+SMOKE_MARKER_GREEN = (0, 255, 0)
+SMOKE_MARKER_MIN_COLOR_RATIO = 0.05
 
 
 class MimicClient(Protocol):
@@ -43,6 +46,7 @@ class SmokeTestRunner:
         artifact_dir.mkdir(parents=True, exist_ok=True)
         baseline_screenshot_path = artifact_dir / "screenshot-before-visual-change.png"
         screenshot_path = artifact_dir / "screenshot-after-visual-change.png"
+        marker_ppm_path = artifact_dir / "screenshot-after-visual-change.ppm"
         bundle_dir = artifact_dir / "bundle"
         marker_path = f"/tmp/talonbox-smoke-test-marker-{uuid.uuid4().hex}.txt"
         token = uuid.uuid4().hex
@@ -148,11 +152,14 @@ class SmokeTestRunner:
                 success_message="Second screenshot artifact validated.",
             )
             self.run_step(
-                "Verify the screenshots changed after the guest visual change",
-                lambda: self.verify_screenshots_differ(
-                    baseline_screenshot_path, screenshot_path
-                ),
-                success_message="Screenshots changed after the guest visual change.",
+                "Capture a PPM screenshot for visual marker validation",
+                lambda: talon_client.capture_screenshot(marker_ppm_path),
+                success_message="PPM marker validation screenshot captured.",
+            )
+            self.run_step(
+                "Verify the Talon visual marker appeared",
+                lambda: self.verify_visual_marker_present(marker_ppm_path),
+                success_message="Talon visual marker appeared.",
             )
         except click.ClickException as error:
             self._fail(str(error), screenshot_path=hint_screenshot())
@@ -333,7 +340,14 @@ class SmokeTestRunner:
             )
 
     def trigger_visual_change(self, talon_client: TalonClient) -> None:
-        talon_client.mimic("talonbox smoke visual test")
+        talon_client.repl(
+            "\n".join(
+                [
+                    "from talon import actions",
+                    "actions.user.talonbox_smoke_test_show_visual_marker()",
+                ]
+            )
+        )
 
     def _build_transfer_service(self, running_vm: RunningVm) -> TransferService:
         return TransferService(running_vm)
@@ -343,11 +357,73 @@ class SmokeTestRunner:
     ) -> TalonClient:
         return TalonClient(running_vm, transfer_service)
 
-    def verify_screenshots_differ(self, before_path: Path, after_path: Path) -> None:
-        if before_path.read_bytes() == after_path.read_bytes():
+    def verify_visual_marker_present(self, path: Path) -> None:
+        total, magenta, green = self.count_marker_pixels(path)
+        minimum = max(1, int(total * SMOKE_MARKER_MIN_COLOR_RATIO))
+        if magenta < minimum or green < minimum:
             raise click.ClickException(
-                "Smoke test screenshots did not change after the guest visual change."
+                "Smoke test screenshot did not contain the Talon visual marker: "
+                f"{path} (magenta pixels: {magenta}, green pixels: {green}, "
+                f"minimum expected for each: {minimum})"
             )
+
+    def count_marker_pixels(self, path: Path) -> tuple[int, int, int]:
+        width, height, rgb = self.read_ppm_rgb(path)
+        magenta = 0
+        green = 0
+        for offset in range(0, len(rgb), 3):
+            color = tuple(rgb[offset : offset + 3])
+            if color == SMOKE_MARKER_MAGENTA:
+                magenta += 1
+            elif color == SMOKE_MARKER_GREEN:
+                green += 1
+        return width * height, magenta, green
+
+    def read_ppm_rgb(self, path: Path) -> tuple[int, int, bytes]:
+        data = path.read_bytes()
+        tokens: list[bytes] = []
+        offset = 0
+        while len(tokens) < 4:
+            while offset < len(data) and chr(data[offset]).isspace():
+                offset += 1
+            if offset >= len(data):
+                raise click.ClickException(f"Smoke test PPM was truncated: {path}")
+            if data[offset : offset + 1] == b"#":
+                newline = data.find(b"\n", offset)
+                if newline == -1:
+                    raise click.ClickException(f"Smoke test PPM was truncated: {path}")
+                offset = newline + 1
+                continue
+            end = offset
+            while end < len(data) and not chr(data[end]).isspace():
+                end += 1
+            tokens.append(data[offset:end])
+            offset = end
+
+        if tokens[0] != b"P6":
+            raise click.ClickException(
+                f"Smoke test screenshot was not a P6 PPM file: {path}"
+            )
+        try:
+            width = int(tokens[1])
+            height = int(tokens[2])
+            max_value = int(tokens[3])
+        except ValueError:
+            raise click.ClickException(
+                f"Smoke test PPM header was invalid: {path}"
+            ) from None
+        if width <= 0 or height <= 0 or max_value != 255:
+            raise click.ClickException(f"Smoke test PPM header was invalid: {path}")
+        if offset >= len(data) or not chr(data[offset]).isspace():
+            raise click.ClickException(f"Smoke test PPM header was invalid: {path}")
+        offset += 1
+        pixels = data[offset:]
+        expected_size = width * height * 3
+        if len(pixels) != expected_size:
+            raise click.ClickException(
+                f"Smoke test PPM pixel data had {len(pixels)} bytes; expected {expected_size}: {path}"
+            )
+        return width, height, pixels
 
     def run_step(
         self,

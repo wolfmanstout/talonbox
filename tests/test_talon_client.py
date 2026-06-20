@@ -131,6 +131,50 @@ def test_talon_client_screenshot_uses_talon_capture_and_download(
     assert cleanup_commands[0].startswith('rm -f "/tmp/talonbox-screenshot-')
 
 
+def test_talon_client_screenshot_preserves_requested_capture_suffix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, transfer_service, talon_client = build_service_stack()
+    repl_payloads: list[str] = []
+    downloads: list[tuple[str, Path]] = []
+    target = tmp_path / "shots" / "screen.ppm"
+
+    monkeypatch.setattr(
+        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=0: None,
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            repl_payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "download",
+        lambda remote, local: downloads.append((remote, local)),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_shell",
+        lambda command, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    talon_client.capture_screenshot(target)
+
+    assert len(downloads) == 1
+    assert downloads[0][1] == target
+    assert downloads[0][0].endswith(".ppm")
+    assert "img.read_pixels(0, 0, img.width, img.height)" in repl_payloads[0]
+    assert "header = f" in repl_payloads[0]
+    assert "P6\\\\n" in repl_payloads[0]
+
+
 def test_talon_client_screenshot_requires_talon_repl_by_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
