@@ -49,29 +49,28 @@ future agents can clone for experiments. For the default public Talon build,
 use this prompt:
 
 ```text
-Help me create the default talonbox golden VM for public Talon.
-Run talonbox create golden, follow the printed setup instructions, and pause
-when I need to handle GUI prompts, permissions, or the Talon EULA.
+Help me create the talonbox golden VM.
+Run `talonbox create --base tahoe-base golden` and follow the printed setup
+instructions.
 ```
 
-If you test Talon beta builds, add one more sentence to the prompt:
+If you test Talon beta builds, add one more sentence to the prompt, adjusting
+the path to the downloaded beta DMG on your machine:
 
 ```text
-Use ~/Downloads/talon-beta.dmg as the Talon DMG, adjusting the path to the
-downloaded beta DMG on this machine.
+Add `--talon-dmg ~/Downloads/talon-beta.dmg` to the `talonbox create` command.
 ```
 
-`create` prints setup instructions for a human or agent to follow. Setup
-requires human decisions, GUI permission prompts, and Talon EULA acceptance.
+`talonbox create` prints setup instructions for a human or agent to follow.
+The `--base` option names a reusable base OS VM before Talon is set up.
 Expect the first golden VM setup to be time-consuming and somewhat
 error-prone: macOS setup screens, Lume automation, Talon first-run prompts, and
 privacy permissions all need to line up. That setup friction is worth getting
 through, and it is not representative of the normal talonbox experience. Once a
-golden VM passes `smoke-test`, cloning it for future Talon experiments should
-feel fast, disposable, and a little bit magical.
+golden VM passes `smoke-test`, talonbox should feel fast and magical.
 
-The Lume VM user is `lume`, and the default Lume password is `lume`. You may
-need those credentials while completing setup over VNC.
+The Lume VM user is `lume`, and the default Lume password is `lume`. The VM
+should auto-login, but you may occasionally need these for permissions dialogs.
 
 For top-level help, run:
 

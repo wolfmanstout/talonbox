@@ -34,7 +34,8 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "VM paths use `NAME:/absolute/path`" in result.output
     assert "temporary clone so the source VM stays clean" in output_words
     assert "Some Talon-backed commands also accept `--vnc`" in result.output
-    assert "may not be working as intended" in result.output
+    assert "prefer it during setup" in result.output
+    assert "Never use automation to accept the Talon EULA." in output_words
     assert "VM lifecycle:" in result.output
     assert "clone" in result.output
     assert "delete" in result.output
@@ -68,7 +69,15 @@ def test_create_help_documents_markdown_instruction_behavior() -> None:
     assert result.exit_code == 0
     assert "Print Markdown instructions" in result.output
     assert "does not create, clone, start, or modify any VM" in result.output
-    assert "talonbox create golden-beta ~/Downloads/talon-beta.dmg" in result.output
+    assert "--base" in result.output
+    assert "Unprefixed talonbox base VM name" in result.output
+    assert "--talon-dmg" in result.output
+    assert "Talon DMG path or URL" in result.output
+    assert "talonbox create --base tahoe-base golden" in result.output
+    assert (
+        "talonbox create --talon-dmg ~/Downloads/talon-beta.dmg golden-beta"
+        in result.output
+    )
 
 
 def test_create_command_prints_default_url_instructions() -> None:
@@ -84,18 +93,21 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "Lume's unattended setup flow also requires `sshpass`" in result.output
     assert "brew install sshpass" in result.output
     assert "https://cua.ai/docs/lume/guide/getting-started/quickstart" in result.output
+    assert "base VM name is `tahoe-base` in talonbox commands" in result.output
+    assert "`talonbox-tahoe-base` in Lume commands" in result.output
+    assert "Pass the unprefixed name to `talonbox create --base`" in result.output
+    assert "lume get talonbox-tahoe-base" in result.output
+    assert "If it already exists, reuse it." in result.output
+    assert "Do not create, overwrite, or delete an existing base VM" in result.output
+    assert "If the base VM does not exist, create it" in result.output
     assert (
-        "This example keeps `tahoe-base` as a clean Lume base VM outside talonbox"
+        "lume create talonbox-tahoe-base --os macos --ipsw latest --disk-size 100GB"
         in result.output
     )
     assert (
-        "lume create tahoe-base --os macos --ipsw latest --disk-size 100GB"
+        "lume setup talonbox-tahoe-base --unattended tahoe --debug --no-display"
         in result.output
     )
-    assert (
-        "lume setup tahoe-base --unattended tahoe --debug --no-display" in result.output
-    )
-    assert "lume get tahoe-base" in result.output
     assert "lume ls" not in result.output
     assert "lume list" not in result.output
     assert "lume dump-docs" in result.output
@@ -107,9 +119,12 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "open the VM over VNC and ask the user" in result.output
     assert "wait for the user to reply before continuing" in result.output
     assert "Do not patch or edit Lume's unattended setup YAML" in result.output
-    assert "use the YAML contents only to advise the user" in result.output
+    assert "use the YAML contents only to determine which setup steps remain" in (
+        result.output
+    )
     assert "Other Sign-In Options" in result.output
-    assert "lume run tahoe-base" in result.output
+    assert "to complete Setup Assistant" in result.output
+    assert "lume run talonbox-tahoe-base" in result.output
     assert "open VNC_URL_FROM_LUME_GET" in result.output
     assert "Skip Apple Account sign-in" in result.output
     assert "The Lume VM user is `lume`" in result.output
@@ -120,15 +135,17 @@ def test_create_command_prints_default_url_instructions() -> None:
         "GUI Setup Assistant decisions should stay with the user over VNC"
         in result.output
     )
-    assert "lume ssh tahoe-base 'sysadminctl -autologin status'" in result.output
-    assert "lume ssh tahoe-base 'test -f /etc/kcpassword'" in result.output
+    assert (
+        "lume ssh talonbox-tahoe-base 'sysadminctl -autologin status'" in result.output
+    )
+    assert "lume ssh talonbox-tahoe-base 'test -f /etc/kcpassword'" in result.output
     assert "returns to a logged-in desktop" in result.output
     assert (
-        "Use the `talonbox-` prefix for the clone name when working directly with `lume`; omit it when running `talonbox` commands."
+        "Use the rendered `talonbox-` prefixed names when working directly with `lume`; omit the prefix when running `talonbox` commands."
         in result.output
     )
-    assert "lume stop tahoe-base" in result.output
-    assert "lume clone tahoe-base talonbox-experiment" in result.output
+    assert "lume stop talonbox-tahoe-base" in result.output
+    assert "lume clone talonbox-tahoe-base talonbox-experiment" in result.output
     assert "talonbox start --no-talon experiment" in result.output
     assert (
         "starts the VM and waits for SSH without trying to launch Talon"
@@ -144,36 +161,51 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert (
         "talonbox screenshot --vnc experiment /tmp/talon-first-run.png" in result.output
     )
+    assert "prefer `--vnc` anywhere it is available" in result.output
+    assert "VNC screenshots capture the VM framebuffer" in result.output
+    assert "talonbox click --vnc" in result.output
+    assert "talonbox type --vnc" in result.output
     assert "talonbox status experiment" in result.output
     assert "talonbox open experiment" in result.output
-    assert "Agents must never try to accept the Talon EULA for you." in result.output
-    assert "Grant permissions to Talon wherever macOS prompts" in result.output
+    assert "The human user must review and accept the Talon EULA" in result.output
+    assert "Agents must never try to accept the Talon EULA." in result.output
+    assert "Do not use `talonbox click --vnc`" in result.output
+    assert "choose a speech model through the Talon menu" in result.output
+    assert "A microphone does not need to be configured" in result.output
+    assert "## 7. Run the setup smoke test and grant permissions" in result.output
+    assert "talonbox smoke-test --in-place experiment" in result.output
+    assert "take a screenshot through VNC" in result.output
+    assert "Permissions dialogs can be accepted using" in result.output
+    assert "more easily handled by a human over VNC" in result.output
+    assert (
+        "It is expected that the user will need to grant permissions" in result.output
+    )
     assert "Microphone" in result.output
     assert "Screen & System Audio Recording" in result.output
-    assert "Troubleshooting advice" in result.output
-    assert "assume first-run prompts or macOS privacy permissions" in result.output
-    assert "do one quick status/log check at most" in result.output
-    assert "times out waiting for Talon's REPL" in result.output
-    assert "the REPL socket does not appear" in result.output
-    assert "the EULA is accepted, but Talon logs are empty" in result.output
-    assert "`talonbox repl` or `talonbox mimic` hangs or times out" in result.output
-    assert "intermittently report `Operation not permitted`" in result.output
-    assert "screenshots do not change" in result.output
-    assert "select a speech model" in result.output
-    assert "Automation" in result.output
-    assert "talonbox smoke-test --in-place experiment" in result.output
-    assert "ask the user to inspect the VM manually" in result.output
     assert "uncheck the box to reopen windows" in result.output
     assert "the agent should ask the user to quit all apps" in result.output
     assert "After the user reports that the VM has restarted" in result.output
+    assert "## 8. Reboot and stop the VM" in result.output
     assert "talonbox stop experiment" in result.output
+    assert "## 9. Smoke test the finished VM" in result.output
     assert "talonbox smoke-test experiment" in result.output
 
 
-def test_create_command_prints_local_dmg_copy_instructions() -> None:
+def test_create_command_rejects_positional_talon_dmg() -> None:
     runner = CliRunner()
 
     result = runner.invoke(cli, ["create", "experiment", "/tmp/Talon Build.dmg"])
+
+    assert result.exit_code == 2
+    assert "Got unexpected extra argument" in result.output
+
+
+def test_create_command_accepts_talon_dmg_option() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli, ["create", "--talon-dmg", "/tmp/Talon Build.dmg", "experiment"]
+    )
 
     assert result.exit_code == 0
     assert (
@@ -181,6 +213,22 @@ def test_create_command_prints_local_dmg_copy_instructions() -> None:
         in result.output
     )
     assert "curl -L -o /tmp/talon.dmg" not in result.output
+
+
+def test_create_command_uses_custom_base_name() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["create", "--base", "sonoma-base", "experiment"])
+
+    assert result.exit_code == 0
+    assert "base VM name is `sonoma-base` in talonbox commands" in result.output
+    assert "`talonbox-sonoma-base` in Lume commands" in result.output
+    assert "lume get talonbox-sonoma-base" in result.output
+    assert (
+        "lume create talonbox-sonoma-base --os macos --ipsw latest --disk-size 100GB"
+        in result.output
+    )
+    assert "lume clone talonbox-sonoma-base talonbox-experiment" in result.output
 
 
 def test_rename_help_documents_requirements() -> None:
