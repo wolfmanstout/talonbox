@@ -209,7 +209,7 @@ class RunningVm:
                 'find "$HOME/.talon/user" -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
             )
         launch_command = (
-            f"open --arch x86_64 -a {shlex.quote(TALON_APP)} "
+            f"open -a {shlex.quote(TALON_APP)} "
             "--stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log"
         )
         for attempt in range(TRANSIENT_RETRY_ATTEMPTS + 1):

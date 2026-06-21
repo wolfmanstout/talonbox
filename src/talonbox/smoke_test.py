@@ -19,6 +19,11 @@ MARKER_MIMIC_RETRY_DELAY_SECONDS = 1.0
 SMOKE_MARKER_MAGENTA = (255, 0, 255)
 SMOKE_MARKER_GREEN = (0, 255, 0)
 SMOKE_MARKER_MIN_COLOR_RATIO = 0.05
+DESKTOP_PROBE_TIMEOUT_SECONDS = 30
+DESKTOP_PROBE_SETTLE_SECONDS = 1.0
+DESKTOP_CAPTURE_MAX_MEAN_ABS_DIFF = 4.0
+DESKTOP_CAPTURE_MAX_MISMATCH_RATIO = 0.02
+DESKTOP_CAPTURE_MISMATCH_CHANNEL_THRESHOLD = 40
 
 
 class MimicClient(Protocol):
@@ -45,6 +50,8 @@ class SmokeTestRunner:
         artifact_dir = self.host_output_root / f"talonbox-smoke-test-{uuid.uuid4().hex}"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         baseline_screenshot_path = artifact_dir / "screenshot-before-visual-change.png"
+        desktop_probe_talon_path = artifact_dir / "screenshot-desktop-probe-talon.ppm"
+        desktop_probe_vnc_path = artifact_dir / "screenshot-desktop-probe-vnc.ppm"
         screenshot_path = artifact_dir / "screenshot-after-visual-change.png"
         marker_ppm_path = artifact_dir / "screenshot-after-visual-change.ppm"
         bundle_dir = artifact_dir / "bundle"
@@ -60,6 +67,10 @@ class SmokeTestRunner:
         def hint_screenshot() -> Path | None:
             if screenshot_path.exists():
                 return screenshot_path
+            if desktop_probe_vnc_path.exists():
+                return desktop_probe_vnc_path
+            if desktop_probe_talon_path.exists():
+                return desktop_probe_talon_path
             if baseline_screenshot_path.exists():
                 return baseline_screenshot_path
             return None
@@ -115,6 +126,32 @@ class SmokeTestRunner:
                     clean_logs=True,
                 ),
                 success_message="Talon restarted after upload.",
+            )
+            self.run_step(
+                "Show a non-Talon desktop capture probe",
+                lambda: self.start_desktop_capture_probe(running_vm, token),
+                success_message="Desktop capture probe shown.",
+            )
+            self.run_step(
+                "Capture the desktop probe with Talon",
+                lambda: talon_client.capture_screenshot(desktop_probe_talon_path),
+                success_message="Talon desktop probe screenshot captured.",
+            )
+            self.run_step(
+                "Capture the desktop probe with VNC",
+                lambda: talon_client.capture_screenshot(
+                    desktop_probe_vnc_path,
+                    vnc=True,
+                ),
+                success_message="VNC desktop probe screenshot captured.",
+            )
+            self.run_step(
+                "Verify Talon can capture the complete desktop",
+                lambda: self.verify_talon_capture_matches_vnc(
+                    desktop_probe_talon_path,
+                    desktop_probe_vnc_path,
+                ),
+                success_message="Talon desktop capture matched VNC.",
             )
             self.run_step(
                 "Run mimic for 'talonbox smoke test' until the marker is verified",
@@ -339,6 +376,18 @@ class SmokeTestRunner:
                 f"Smoke test screenshot was not a PNG file: {path}"
             )
 
+    def start_desktop_capture_probe(self, running_vm: RunningVm, token: str) -> None:
+        script = (
+            f'display dialog "talonbox desktop capture probe {token}" '
+            f'buttons {{"OK"}} giving up after {DESKTOP_PROBE_TIMEOUT_SECONDS}'
+        )
+        running_vm.run_shell(
+            "nohup osascript -e "
+            f"{shlex.quote(script)} "
+            ">/tmp/talonbox-desktop-capture-probe.log 2>&1 &"
+        )
+        time.sleep(DESKTOP_PROBE_SETTLE_SECONDS)
+
     def trigger_visual_change(self, talon_client: TalonClient) -> None:
         talon_client.repl(
             "\n".join(
@@ -365,6 +414,58 @@ class SmokeTestRunner:
                 "Smoke test screenshot did not contain the Talon visual marker: "
                 f"{path} (magenta pixels: {magenta}, green pixels: {green}, "
                 f"minimum expected for each: {minimum})"
+            )
+
+    def verify_talon_capture_matches_vnc(
+        self, talon_path: Path, vnc_path: Path
+    ) -> None:
+        talon_width, talon_height, talon_rgb = self.read_ppm_rgb(talon_path)
+        vnc_width, vnc_height, vnc_rgb = self.read_ppm_rgb(vnc_path)
+        if talon_width <= 0 or talon_height <= 0:
+            raise click.ClickException(
+                f"Talon desktop capture had invalid dimensions: {talon_path}"
+            )
+        if vnc_width <= 0 or vnc_height <= 0:
+            raise click.ClickException(
+                f"VNC desktop capture had invalid dimensions: {vnc_path}"
+            )
+
+        total_pixels = talon_width * talon_height
+        total_channel_diff = 0
+        mismatched_pixels = 0
+        for y in range(talon_height):
+            source_y = min(vnc_height - 1, int((y + 0.5) * vnc_height / talon_height))
+            for x in range(talon_width):
+                source_x = min(
+                    vnc_width - 1,
+                    int((x + 0.5) * vnc_width / talon_width),
+                )
+                talon_offset = (y * talon_width + x) * 3
+                vnc_offset = (source_y * vnc_width + source_x) * 3
+                red_diff = abs(talon_rgb[talon_offset] - vnc_rgb[vnc_offset])
+                green_diff = abs(talon_rgb[talon_offset + 1] - vnc_rgb[vnc_offset + 1])
+                blue_diff = abs(talon_rgb[talon_offset + 2] - vnc_rgb[vnc_offset + 2])
+                total_channel_diff += red_diff + green_diff + blue_diff
+                if (
+                    max(red_diff, green_diff, blue_diff)
+                    > DESKTOP_CAPTURE_MISMATCH_CHANNEL_THRESHOLD
+                ):
+                    mismatched_pixels += 1
+
+        mean_abs_diff = total_channel_diff / (total_pixels * 3)
+        mismatch_ratio = mismatched_pixels / total_pixels
+        if (
+            mean_abs_diff > DESKTOP_CAPTURE_MAX_MEAN_ABS_DIFF
+            or mismatch_ratio > DESKTOP_CAPTURE_MAX_MISMATCH_RATIO
+        ):
+            raise click.ClickException(
+                "Talon desktop capture did not match the VNC framebuffer. "
+                "Talon may be missing Screen Recording permission. "
+                f"mean absolute channel difference: {mean_abs_diff:.2f} "
+                f"(maximum {DESKTOP_CAPTURE_MAX_MEAN_ABS_DIFF:.2f}); "
+                f"mismatched pixel ratio: {mismatch_ratio:.2%} "
+                f"(maximum {DESKTOP_CAPTURE_MAX_MISMATCH_RATIO:.2%}); "
+                f"Talon capture: {talon_path}; VNC capture: {vnc_path}"
             )
 
     def count_marker_pixels(self, path: Path) -> tuple[int, int, int]:

@@ -158,6 +158,89 @@ def test_verify_visual_marker_present_rejects_unrelated_change(tmp_path: Path) -
         runner.verify_visual_marker_present(screenshot)
 
 
+def test_verify_talon_capture_matches_vnc_accepts_scaled_match(
+    tmp_path: Path,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    talon = tmp_path / "talon.ppm"
+    vnc = tmp_path / "vnc.ppm"
+    black = bytes([0, 0, 0])
+    red = bytes([255, 0, 0])
+    green = bytes([0, 255, 0])
+    blue = bytes([0, 0, 255])
+    write_ppm(talon, 2, 2, black + red + green + blue)
+    write_ppm(
+        vnc,
+        4,
+        4,
+        black * 2
+        + red * 2
+        + black * 2
+        + red * 2
+        + green * 2
+        + blue * 2
+        + green * 2
+        + blue * 2,
+    )
+
+    runner.verify_talon_capture_matches_vnc(talon, vnc)
+
+
+def test_verify_talon_capture_matches_vnc_rejects_missing_desktop(
+    tmp_path: Path,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    talon = tmp_path / "talon.ppm"
+    vnc = tmp_path / "vnc.ppm"
+    write_ppm(talon, 10, 10, bytes([0, 0, 0]) * 100)
+    write_ppm(vnc, 20, 20, bytes([255, 255, 255]) * 400)
+
+    with pytest.raises(click.ClickException, match="did not match the VNC"):
+        runner.verify_talon_capture_matches_vnc(talon, vnc)
+
+
+def test_verify_talon_capture_matches_vnc_rejects_small_overlay_delta(
+    tmp_path: Path,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    talon = tmp_path / "talon.ppm"
+    vnc = tmp_path / "vnc.ppm"
+    black = bytes([0, 0, 0])
+    white = bytes([255, 255, 255])
+    write_ppm(talon, 10, 10, black * 100)
+    write_ppm(vnc, 10, 10, white * 3 + black * 97)
+
+    with pytest.raises(click.ClickException, match="mismatched pixel ratio"):
+        runner.verify_talon_capture_matches_vnc(talon, vnc)
+
+
+def test_start_desktop_capture_probe_shows_dialog_asynchronously(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    running_vm = running_vm_fixture()
+    calls: list[str] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr(running_vm, "run_shell", lambda command: calls.append(command))
+    monkeypatch.setattr(
+        "talonbox.smoke_test.time.sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+
+    runner.start_desktop_capture_probe(running_vm, "probe-token")
+
+    assert len(calls) == 1
+    assert "nohup osascript -e" in calls[0]
+    assert "talonbox desktop capture probe probe-token" in calls[0]
+    assert "giving up after 30" in calls[0]
+    assert calls[0].endswith(">/tmp/talonbox-desktop-capture-probe.log 2>&1 &")
+    assert sleeps == [1.0]
+
+
 def test_smoke_test_runner_rejects_running_source_without_mutating_it(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -217,8 +300,9 @@ def test_smoke_test_runner_success_runs_end_to_end(
     monkeypatch.setattr(
         vm_controller,
         "for_vm",
-        lambda name: steps.append(f"for_vm:{name.startswith('smoke-test-')}")
-        or temp_controller,
+        lambda name: (
+            steps.append(f"for_vm:{name.startswith('smoke-test-')}") or temp_controller
+        ),
     )
     monkeypatch.setattr(
         vm_controller,
@@ -252,8 +336,8 @@ def test_smoke_test_runner_success_runs_end_to_end(
         def mimic(self, command: str) -> None:
             steps.append(f"mimic:{command}")
 
-        def capture_screenshot(self, path: Path) -> None:
-            steps.append(f"capture:{path.name}")
+        def capture_screenshot(self, path: Path, *, vnc: bool = False) -> None:
+            steps.append(f"capture{'-vnc' if vnc else ''}:{path.name}")
             path.write_bytes(b"\x89PNG\r\n\x1a\npayload")
 
     monkeypatch.setattr(
@@ -266,6 +350,18 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "run_marker_mimic_until_verified",
         lambda talon_client_arg, running_vm_arg, marker_path, token: steps.append(
             "mimic_until_marker"
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "start_desktop_capture_probe",
+        lambda running_vm_arg, token: steps.append("show_desktop_probe"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "verify_talon_capture_matches_vnc",
+        lambda talon_screenshot, vnc_screenshot: steps.append(
+            "verify_complete_capture"
         ),
     )
     monkeypatch.setattr(
@@ -300,6 +396,10 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "start",
         "rsync:-a",
         "restart:False:True",
+        "show_desktop_probe",
+        "capture:screenshot-desktop-probe-talon.ppm",
+        "capture-vnc:screenshot-desktop-probe-vnc.ppm",
+        "verify_complete_capture",
         "mimic_until_marker",
         "capture:screenshot-before-visual-change.png",
         "show_visual_change",
@@ -366,8 +466,8 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         def mimic(self, command: str) -> None:
             steps.append(f"mimic:{command}")
 
-        def capture_screenshot(self, path: Path) -> None:
-            steps.append(f"capture:{path.name}")
+        def capture_screenshot(self, path: Path, *, vnc: bool = False) -> None:
+            steps.append(f"capture{'-vnc' if vnc else ''}:{path.name}")
             path.write_bytes(b"\x89PNG\r\n\x1a\npayload")
 
     monkeypatch.setattr(
@@ -380,6 +480,18 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         "run_marker_mimic_until_verified",
         lambda talon_client_arg, running_vm_arg, marker_path, token: steps.append(
             "mimic_until_marker"
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "start_desktop_capture_probe",
+        lambda running_vm_arg, token: steps.append("show_desktop_probe"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "verify_talon_capture_matches_vnc",
+        lambda talon_screenshot, vnc_screenshot: steps.append(
+            "verify_complete_capture"
         ),
     )
     monkeypatch.setattr(
@@ -411,6 +523,10 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         "start",
         "rsync:-a",
         "restart:False:True",
+        "show_desktop_probe",
+        "capture:screenshot-desktop-probe-talon.ppm",
+        "capture-vnc:screenshot-desktop-probe-vnc.ppm",
+        "verify_complete_capture",
         "mimic_until_marker",
         "capture:screenshot-before-visual-change.png",
         "show_visual_change",
@@ -531,7 +647,7 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
         def mimic(self, command: str) -> None:
             return None
 
-        def capture_screenshot(self, path: Path) -> None:
+        def capture_screenshot(self, path: Path, *, vnc: bool = False) -> None:
             path.write_bytes(b"not-a-png")
 
     monkeypatch.setattr(
@@ -543,6 +659,16 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
         runner,
         "run_marker_mimic_until_verified",
         lambda talon_client_arg, running_vm_arg, marker_path, token: None,
+    )
+    monkeypatch.setattr(
+        runner,
+        "start_desktop_capture_probe",
+        lambda running_vm_arg, token: None,
+    )
+    monkeypatch.setattr(
+        runner,
+        "verify_talon_capture_matches_vnc",
+        lambda talon_screenshot, vnc_screenshot: None,
     )
     monkeypatch.setattr(temp_controller, "stop", lambda: stop_calls.append("stop"))
     monkeypatch.setattr(temp_controller, "delete", lambda: stop_calls.append("delete"))

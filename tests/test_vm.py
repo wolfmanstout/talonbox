@@ -427,7 +427,7 @@ def test_running_vm_restart_talon_waits_for_repl_and_sleeps(
     assert calls[0] == ("192.168.64.10", "pkill -x Talon >/dev/null 2>&1 || true")
     assert (
         "192.168.64.10",
-        "open --arch x86_64 -a /Applications/Talon.app --stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log",
+        "open -a /Applications/Talon.app --stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log",
     ) in calls
     assert calls[-1] == ("192.168.64.10", "wait_for_talon_repl")
     assert sleeps == [vm_module.TALON_POST_RESTART_SETTLE_SECONDS]
@@ -438,7 +438,7 @@ def test_running_vm_restart_talon_retries_transient_launch_failure(
 ) -> None:
     running_vm = running_vm_fixture()
     launch_command = (
-        "open --arch x86_64 -a /Applications/Talon.app "
+        "open -a /Applications/Talon.app "
         "--stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log"
     )
     launch_attempts = 0

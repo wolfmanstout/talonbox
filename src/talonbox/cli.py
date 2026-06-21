@@ -246,12 +246,6 @@ Verify SSH access:
 talonbox exec {quoted_name} -- whoami
 ```
 
-Install Rosetta:
-
-```bash
-talonbox exec {quoted_name} -- softwareupdate --install-rosetta --agree-to-license
-```
-
 Copy or download the Talon DMG:
 
 {talon_dmg_setup}
@@ -544,7 +538,7 @@ def start(settings: CliSettings, name: str, no_talon: bool) -> None:
     help=(
         "Restart Talon inside the running VM without rebooting the VM.\n\n"
         "This truncates `~/.talon/talon.log` and `/tmp/talonbox-talon.log`, then relaunches "
-        "Talon under Rosetta in the logged-in GUI session."
+        "Talon in the logged-in GUI session."
     ),
     epilog=_examples_epilog("talonbox restart-talon experiment"),
 )

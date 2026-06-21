@@ -137,10 +137,7 @@ def test_create_command_prints_default_url_instructions() -> None:
         "talonbox exec experiment -- curl -L -o /tmp/talon.dmg https://talonvoice.com/dl/latest/talon-mac.dmg"
         in result.output
     )
-    assert (
-        "talonbox exec experiment -- softwareupdate --install-rosetta --agree-to-license"
-        in result.output
-    )
+    assert "install-rosetta" not in result.output
     assert "talonbox restart-talon experiment" in result.output
     assert (
         "talonbox screenshot --vnc experiment /tmp/talon-first-run.png" in result.output
