@@ -33,7 +33,7 @@ HELP_COMMAND_GROUPS = (
         ),
     ),
     ("Guest shell", ("exec", "rsync", "scp")),
-    ("Talon RPC", ("restart-talon", "repl", "mimic", "screenshot")),
+    ("Talon RPC", ("restart-talon", "repl", "mimic", "click", "type", "screenshot")),
 )
 
 DEFAULT_TALON_DMG_URL = "https://talonvoice.com/dl/latest/talon-mac.dmg"
@@ -356,8 +356,11 @@ talonbox smoke-test {quoted_name}
         "Minimal Talon VM control primitives for coding agents.\n\n"
         "Use named macOS VMs as disposable Talon sandboxes: clone a source VM for an "
         "experiment, start it, copy scripts with `rsync` or `scp`, then drive Talon with "
-        "`repl`, `mimic`, and `screenshot`. VM paths use `NAME:/absolute/path`, and "
-        "`smoke-test` runs diagnostics in a temporary clone so the source VM stays clean."
+        "`repl`, `mimic`, `click`, `type`, and `screenshot`.\n\n"
+        "VM paths use `NAME:/absolute/path`, and "
+        "`smoke-test` runs diagnostics in a temporary clone so the source VM stays clean.\n\n"
+        "Some Talon-backed commands also accept `--vnc`, which can help when Talon's "
+        "REPL, screen capture, or input APIs may not be working as intended."
     ),
     epilog=_examples_epilog(
         "talonbox clone golden experiment",
@@ -365,6 +368,8 @@ talonbox smoke-test {quoted_name}
         "talonbox rsync -a ~/.talon/user/ experiment:/Users/lume/.talon/user/",
         "talonbox exec experiment -- whoami",
         "talonbox mimic experiment 'focus chrome'",
+        "talonbox click experiment 400 300",
+        "talonbox type experiment 'hello from Talon'",
         "talonbox screenshot experiment /tmp/talon.png",
         "talonbox smoke-test golden",
         "talonbox open experiment",
@@ -719,6 +724,74 @@ def repl(settings: CliSettings, name: str, code: str | None) -> None:
 @pass_settings
 def mimic(settings: CliSettings, name: str, command: str) -> None:
     _build_talon_client(settings, name).mimic(command)
+
+
+@cli.command(
+    name="click",
+    short_help="Click inside the VM.",
+    help=(
+        "Move the pointer to X,Y and click inside the VM.\n\n"
+        "By default this uses Talon's mouse APIs and requires Talon's REPL. Use `--vnc` "
+        "to click through the VM's VNC connection instead."
+    ),
+    epilog=_examples_epilog(
+        "talonbox click experiment 400 300",
+        "talonbox click --button right experiment 400 300",
+        "talonbox click --vnc experiment 400 300",
+    ),
+)
+@click.option(
+    "--vnc",
+    "vnc",
+    is_flag=True,
+    help="Use the VM's VNC connection instead of Talon's mouse APIs.",
+)
+@click.option(
+    "--button",
+    type=click.Choice(["left", "middle", "right"]),
+    default="left",
+    show_default=True,
+    help="Mouse button to click.",
+)
+@click.argument("name", metavar="NAME")
+@click.argument("x", type=click.IntRange(min=0), metavar="X")
+@click.argument("y", type=click.IntRange(min=0), metavar="Y")
+@pass_settings
+def click_command(
+    settings: CliSettings, vnc: bool, button: str, name: str, x: int, y: int
+) -> None:
+    _build_talon_client(settings, name).click(
+        x,
+        y,
+        button=button,
+        vnc=vnc,
+    )
+
+
+@cli.command(
+    name="type",
+    short_help="Type text inside the VM.",
+    help=(
+        "Type TEXT into the focused field inside the VM.\n\n"
+        "By default this uses Talon's text insertion API and requires Talon's REPL. Use "
+        "`--vnc` to send key presses through the VM's VNC connection instead."
+    ),
+    epilog=_examples_epilog(
+        "talonbox type experiment 'hello from Talon'",
+        "talonbox type --vnc experiment 'hello before Talon is ready'",
+    ),
+)
+@click.option(
+    "--vnc",
+    "vnc",
+    is_flag=True,
+    help="Use the VM's VNC connection instead of Talon's text insertion API.",
+)
+@click.argument("name", metavar="NAME")
+@click.argument("text", metavar="TEXT")
+@pass_settings
+def type_command(settings: CliSettings, vnc: bool, name: str, text: str) -> None:
+    _build_talon_client(settings, name).type_text(text, vnc=vnc)
 
 
 @cli.command(

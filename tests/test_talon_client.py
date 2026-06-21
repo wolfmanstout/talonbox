@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import click
 import pytest
@@ -73,6 +74,65 @@ def test_talon_client_mimic_uses_python_escaped_payload(
 
     assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
     assert payloads == ["mimic('say \"hello\"\\nworld')\n"]
+
+
+def test_talon_client_click_uses_talon_mouse_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, talon_client = build_service_stack()
+    waits: list[tuple[str, float]] = []
+    payloads: list[str] = []
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: waits.append(
+            (talon_client.running_vm.ip_address, timeout)
+        ),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+
+    talon_client.click(123, 456, button="right")
+
+    assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
+    assert "from talon import ctrl" in payloads[0]
+    assert "ctrl.mouse_move(123, 456)" in payloads[0]
+    assert "ctrl.mouse_click(button=1)" in payloads[0]
+
+
+def test_talon_client_type_uses_talon_insert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, talon_client = build_service_stack()
+    waits: list[tuple[str, float]] = []
+    payloads: list[str] = []
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: waits.append(
+            (talon_client.running_vm.ip_address, timeout)
+        ),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+
+    talon_client.type_text('hello "world"\n')
+
+    assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
+    assert "from talon import actions" in payloads[0]
+    assert "actions.insert(\\'hello \"world\"\\\\n\\')" in payloads[0]
 
 
 def test_talon_client_screenshot_uses_talon_capture_and_download(
@@ -200,70 +260,50 @@ def test_talon_client_screenshot_requires_talon_repl_by_default(
         talon_client.capture_screenshot(target)
 
 
-def test_talon_client_screenshot_can_use_explicit_vnc(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _, transfer_service, talon_client = build_service_stack()
-    connects: list[tuple[str, str | None]] = []
-    captures: list[Path] = []
+def test_talon_client_screenshot_delegates_to_vnc_client(tmp_path: Path) -> None:
+    _, _, talon_client = build_service_stack()
+    calls: list[Path] = []
     target = tmp_path / "shots" / "screen.png"
-    talon_client.running_vm.vnc_url = "vnc://:secret%20words@127.0.0.1:63414"
 
     class FakeVncClient:
-        def __enter__(self) -> FakeVncClient:
-            return self
+        def capture_screenshot(self, filepath: Path) -> None:
+            calls.append(filepath)
 
-        def __exit__(self, *args: object) -> None:
-            pass
-
-        def captureScreen(self, path: str) -> None:
-            captures.append(Path(path))
-            Path(path).write_bytes(b"not-a-png")
-
-    monkeypatch.setattr(
-        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
-    )
-    monkeypatch.setattr(
-        talon_client.running_vm,
-        "wait_for_talon_repl",
-        lambda *, timeout=0: pytest.fail("VNC screenshot should not wait for REPL"),
-    )
-    monkeypatch.setattr(
-        talon_client.running_vm,
-        "run_shell",
-        lambda command, **kwargs: pytest.fail("VNC screenshot should not use SSH"),
-    )
-    monkeypatch.setattr(
-        talon_client.running_vm,
-        "download",
-        lambda remote, local: pytest.fail("VNC screenshot should not download"),
-    )
-    monkeypatch.setattr(
-        "talonbox.talon_client.vnc_api.connect",
-        lambda server, password=None, timeout=None: (
-            connects.append((server, password)) or FakeVncClient()
-        ),
-    )
+    talon_client.vnc_client = cast(Any, FakeVncClient())
 
     talon_client.capture_screenshot(target, vnc=True)
 
-    assert target.parent.exists()
-    assert connects == [("127.0.0.1::63414", "secret words")]
-    assert captures == [target]
+    assert calls == [target]
 
 
-def test_talon_client_vnc_screenshot_requires_vnc_url(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _, transfer_service, talon_client = build_service_stack()
-    target = tmp_path / "shots" / "screen.png"
+def test_talon_client_click_delegates_to_vnc_client() -> None:
+    _, _, talon_client = build_service_stack()
+    calls: list[tuple[int, int, str]] = []
 
-    monkeypatch.setattr(
-        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
-    )
+    class FakeVncClient:
+        def click(self, x: int, y: int, *, button: str) -> None:
+            calls.append((x, y, button))
 
-    with pytest.raises(click.ClickException, match="does not expose a VNC URL"):
-        talon_client.capture_screenshot(target, vnc=True)
+    talon_client.vnc_client = cast(Any, FakeVncClient())
+
+    talon_client.click(123, 456, button="middle", vnc=True)
+
+    assert calls == [(123, 456, "middle")]
+
+
+def test_talon_client_type_delegates_to_vnc_client() -> None:
+    _, _, talon_client = build_service_stack()
+    calls: list[str] = []
+
+    class FakeVncClient:
+        def type_text(self, text: str) -> None:
+            calls.append(text)
+
+    talon_client.vnc_client = cast(Any, FakeVncClient())
+
+    talon_client.type_text("hello", vnc=True)
+
+    assert calls == ["hello"]
 
 
 def test_talon_client_screenshot_rejects_output_outside_tmp() -> None:

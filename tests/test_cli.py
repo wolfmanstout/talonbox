@@ -33,6 +33,8 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "Use named macOS VMs as disposable Talon sandboxes" in result.output
     assert "VM paths use `NAME:/absolute/path`" in result.output
     assert "temporary clone so the source VM stays clean" in output_words
+    assert "Some Talon-backed commands also accept `--vnc`" in result.output
+    assert "may not be working as intended" in result.output
     assert "VM lifecycle:" in result.output
     assert "clone" in result.output
     assert "delete" in result.output
@@ -251,6 +253,29 @@ def test_mimic_help_works() -> None:
     assert "Send one phrase to the VM's Talon REPL" in result.output
 
 
+def test_click_help_documents_vnc_mode() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["click", "--help"])
+
+    assert result.exit_code == 0
+    assert "--vnc" in result.output
+    assert "--button" in result.output
+    assert "requires Talon's REPL" in result.output
+    assert "talonbox click --vnc experiment 400 300" in result.output
+
+
+def test_type_help_documents_vnc_mode() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["type", "--help"])
+
+    assert result.exit_code == 0
+    assert "--vnc" in result.output
+    assert "requires Talon's REPL" in result.output
+    assert "talonbox type --vnc experiment" in result.output
+
+
 def test_screenshot_help_documents_explicit_vnc_mode() -> None:
     runner = CliRunner()
 
@@ -399,8 +424,9 @@ def test_open_command_opens_vnc_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         cli_module.subprocess,
         "run",
-        lambda cmd, check=False: calls.append(cmd)
-        or subprocess.CompletedProcess(cmd, 0),
+        lambda cmd, check=False: (
+            calls.append(cmd) or subprocess.CompletedProcess(cmd, 0)
+        ),
     )
 
     result = runner.invoke(cli, ["open", "experiment"])
@@ -450,6 +476,92 @@ def test_screenshot_command_can_use_vnc(
 
     assert result.exit_code == 0
     assert calls == [("capture_screenshot", "/tmp/screen.png", True)]
+
+
+def test_click_command_uses_talon_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, int, int, str, bool]] = []
+
+    class FakeClient:
+        def click(
+            self, x: int, y: int, *, button: str = "left", vnc: bool = False
+        ) -> None:
+            calls.append(("click", x, y, button, vnc))
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
+    )
+
+    result = runner.invoke(cli, ["click", "experiment", "400", "300"])
+
+    assert result.exit_code == 0
+    assert calls == [("click", 400, 300, "left", False)]
+
+
+def test_click_command_can_use_vnc_and_button(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, int, int, str, bool]] = []
+
+    class FakeClient:
+        def click(
+            self, x: int, y: int, *, button: str = "left", vnc: bool = False
+        ) -> None:
+            calls.append(("click", x, y, button, vnc))
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
+    )
+
+    result = runner.invoke(
+        cli, ["click", "--vnc", "--button", "right", "experiment", "400", "300"]
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("click", 400, 300, "right", True)]
+
+
+def test_type_command_uses_talon_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, str, bool]] = []
+
+    class FakeClient:
+        def type_text(self, text: str, *, vnc: bool = False) -> None:
+            calls.append(("type_text", text, vnc))
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
+    )
+
+    result = runner.invoke(cli, ["type", "experiment", "hello"])
+
+    assert result.exit_code == 0
+    assert calls == [("type_text", "hello", False)]
+
+
+def test_type_command_can_use_vnc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, str, bool]] = []
+
+    class FakeClient:
+        def type_text(self, text: str, *, vnc: bool = False) -> None:
+            calls.append(("type_text", text, vnc))
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
+    )
+
+    result = runner.invoke(cli, ["type", "--vnc", "experiment", "hello"])
+
+    assert result.exit_code == 0
+    assert calls == [("type_text", "hello", True)]
 
 
 def test_list_command_prints_public_vms(monkeypatch: pytest.MonkeyPatch) -> None:

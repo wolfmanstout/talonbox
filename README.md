@@ -86,6 +86,8 @@ talonbox clone golden experiment
 talonbox start experiment
 talonbox rsync -a ~/.talon/user/ experiment:/Users/lume/.talon/user/
 talonbox mimic experiment "focus chrome"
+talonbox click experiment 400 300
+talonbox type experiment "hello from Talon"
 talonbox screenshot experiment /tmp/talon.png
 talonbox open experiment
 talonbox stop experiment

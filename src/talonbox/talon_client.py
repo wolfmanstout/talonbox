@@ -3,24 +3,30 @@ from __future__ import annotations
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any, cast
-from urllib.parse import unquote, urlparse
 
 import click
-from vncdotool import api as vnc_api
 
 from .transfer import TransferService
 from .vm import RemoteCommandError, RunningVm, TransportError
+from .vnc_client import VncClient
 
-VNC_CAPTURE_TIMEOUT_SECONDS = 30.0
+TALON_MOUSE_BUTTONS = {
+    "left": 0,
+    "right": 1,
+    "middle": 2,
+}
 
 
 class TalonClient:
     def __init__(
-        self, running_vm: RunningVm, transfer_service: TransferService
+        self,
+        running_vm: RunningVm,
+        transfer_service: TransferService,
+        vnc_client: VncClient | None = None,
     ) -> None:
         self.running_vm = running_vm
         self.transfer_service = transfer_service
+        self.vnc_client = vnc_client or VncClient(running_vm, transfer_service)
 
     def repl(self, code: str) -> None:
         self.running_vm.wait_for_talon_repl()
@@ -39,12 +45,48 @@ class TalonClient:
         if result.returncode:
             raise click.exceptions.Exit(result.returncode)
 
+    def click(self, x: int, y: int, *, button: str = "left", vnc: bool = False) -> None:
+        if vnc:
+            self.vnc_client.click(x, y, button=button)
+            return
+
+        talon_button = TALON_MOUSE_BUTTONS[button]
+        code = "\n".join(
+            [
+                "from talon import ctrl",
+                f"ctrl.mouse_move({x}, {y})",
+                f"ctrl.mouse_click(button={talon_button})",
+                "",
+            ]
+        )
+        self.running_vm.wait_for_talon_repl()
+        result = self.running_vm.run_repl(f"exec({code!r})\n")
+        if result.returncode:
+            raise click.exceptions.Exit(result.returncode)
+
+    def type_text(self, text: str, *, vnc: bool = False) -> None:
+        if vnc:
+            self.vnc_client.type_text(text)
+            return
+
+        code = "\n".join(
+            [
+                "from talon import actions",
+                f"actions.insert({text!r})",
+                "",
+            ]
+        )
+        self.running_vm.wait_for_talon_repl()
+        result = self.running_vm.run_repl(f"exec({code!r})\n")
+        if result.returncode:
+            raise click.exceptions.Exit(result.returncode)
+
     def capture_screenshot(self, filepath: Path, *, vnc: bool = False) -> None:
+        if vnc:
+            self.vnc_client.capture_screenshot(filepath)
+            return
         filepath = self.transfer_service.normalize_local_output_path(filepath)
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        if vnc:
-            self._capture_with_vnc(filepath)
-            return
 
         suffix = filepath.suffix if filepath.suffix else ".png"
         remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}{suffix}"
@@ -106,33 +148,3 @@ class TalonClient:
             ]
         )
         return self.running_vm.run_repl(f"exec({code!r})\n")
-
-    def _capture_with_vnc(self, filepath: Path) -> None:
-        if not self.running_vm.vnc_url:
-            raise click.ClickException("VM does not expose a VNC URL.")
-        server, password = self._parse_vnc_url(self.running_vm.vnc_url)
-        connect = cast(Any, vnc_api.connect)
-        try:
-            with connect(
-                server,
-                password=password,
-                timeout=VNC_CAPTURE_TIMEOUT_SECONDS,
-            ) as client:
-                client.captureScreen(str(filepath))
-        except Exception as error:
-            raise click.ClickException(f"VNC screenshot failed: {error}") from None
-        finally:
-            vnc_api.shutdown()
-
-    def _parse_vnc_url(self, vnc_url: str) -> tuple[str, str | None]:
-        parsed = urlparse(vnc_url)
-        if parsed.scheme != "vnc" or not parsed.hostname:
-            raise click.ClickException(f"Invalid VNC URL for VM: {vnc_url}")
-        try:
-            port = parsed.port
-        except ValueError as error:
-            raise click.ClickException(f"Invalid VNC URL for VM: {vnc_url}") from error
-
-        server = parsed.hostname if port is None else f"{parsed.hostname}::{port}"
-        password = unquote(parsed.password) if parsed.password is not None else None
-        return server, password
