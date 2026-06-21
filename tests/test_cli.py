@@ -140,12 +140,10 @@ def test_create_command_prints_default_url_instructions() -> None:
     )
     assert "lume ssh talonbox-tahoe-base 'test -f /etc/kcpassword'" in result.output
     assert "returns to a logged-in desktop" in result.output
-    assert (
-        "Use the rendered `talonbox-` prefixed names when working directly with `lume`; omit the prefix when running `talonbox` commands."
-        in result.output
-    )
-    assert "lume stop talonbox-tahoe-base" in result.output
-    assert "lume clone talonbox-tahoe-base talonbox-experiment" in result.output
+    assert "Use `talonbox clone`, not `lume clone`" in result.output
+    assert "talonbox stop tahoe-base" in result.output
+    assert "talonbox clone tahoe-base experiment" in result.output
+    assert "lume clone talonbox-tahoe-base talonbox-experiment" not in result.output
     assert "talonbox start --no-talon experiment" in result.output
     assert (
         "starts the VM and waits for SSH without trying to launch Talon"
@@ -177,11 +175,23 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "take a screenshot through VNC" in result.output
     assert "Permissions dialogs can be accepted using" in result.output
     assert "more easily handled by a human over VNC" in result.output
+    assert "After any permission click or typed confirmation" in result.output
+    assert "talonbox screenshot --vnc experiment /tmp/permission-after-vnc.png" in (
+        result.output
+    )
+    assert "talonbox screenshot experiment /tmp/permission-after-talon.png" in (
+        result.output
+    )
+    assert "talonbox type --vnc experiment $'\\n'" in result.output
     assert (
         "It is expected that the user will need to grant permissions" in result.output
     )
     assert "Microphone" in result.output
     assert "Screen & System Audio Recording" in result.output
+    assert "take one more VNC screenshot before the reboot" in result.output
+    assert "talonbox screenshot --vnc experiment /tmp/before-reboot-vnc.png" in (
+        result.output
+    )
     assert "uncheck the box to reopen windows" in result.output
     assert "the agent should ask the user to quit all apps" in result.output
     assert "After the user reports that the VM has restarted" in result.output
@@ -228,7 +238,7 @@ def test_create_command_uses_custom_base_name() -> None:
         "lume create talonbox-sonoma-base --os macos --ipsw latest --disk-size 100GB"
         in result.output
     )
-    assert "lume clone talonbox-sonoma-base talonbox-experiment" in result.output
+    assert "talonbox clone sonoma-base experiment" in result.output
 
 
 def test_rename_help_documents_requirements() -> None:
@@ -305,11 +315,17 @@ def test_click_help_documents_vnc_mode() -> None:
     runner = CliRunner()
 
     result = runner.invoke(cli, ["click", "--help"])
+    output_words = " ".join(result.output.split())
 
     assert result.exit_code == 0
     assert "--vnc" in result.output
     assert "--button" in result.output
     assert "requires Talon's REPL" in result.output
+    assert "Coordinates match the chosen backend" in output_words
+    assert "Without `--vnc`, use coordinates from Talon screenshots" in output_words
+    assert "With `--vnc`, use coordinates from `talonbox screenshot --vnc`" in (
+        output_words
+    )
     assert "talonbox click --vnc experiment 400 300" in result.output
 
 
@@ -328,11 +344,19 @@ def test_screenshot_help_documents_explicit_vnc_mode() -> None:
     runner = CliRunner()
 
     result = runner.invoke(cli, ["screenshot", "--help"])
+    output_words = " ".join(result.output.split())
 
     assert result.exit_code == 0
     assert "--vnc" in result.output
     assert "--screencapture" not in result.output
     assert "requires Talon's REPL" in result.output
+    assert "two screenshot modes may produce different pixel sizes" in output_words
+    assert "Use coordinates from a Talon screenshot with `talonbox click`" in (
+        output_words
+    )
+    assert "use coordinates from a VNC screenshot with `talonbox click --vnc`" in (
+        output_words
+    )
     assert (
         "talonbox screenshot --vnc experiment /tmp/talon-first-run.png" in result.output
     )

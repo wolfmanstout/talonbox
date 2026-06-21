@@ -52,6 +52,10 @@ class SmokeTestRunner:
         baseline_screenshot_path = artifact_dir / "screenshot-before-visual-change.png"
         desktop_probe_talon_path = artifact_dir / "screenshot-desktop-probe-talon.ppm"
         desktop_probe_vnc_path = artifact_dir / "screenshot-desktop-probe-vnc.ppm"
+        desktop_probe_talon_png_path = (
+            artifact_dir / "screenshot-desktop-probe-talon.png"
+        )
+        desktop_probe_vnc_png_path = artifact_dir / "screenshot-desktop-probe-vnc.png"
         screenshot_path = artifact_dir / "screenshot-after-visual-change.png"
         marker_ppm_path = artifact_dir / "screenshot-after-visual-change.ppm"
         bundle_dir = artifact_dir / "bundle"
@@ -144,6 +148,19 @@ class SmokeTestRunner:
                     vnc=True,
                 ),
                 success_message="VNC desktop probe screenshot captured.",
+            )
+            self.run_step(
+                "Capture a PNG copy of the desktop probe with Talon",
+                lambda: talon_client.capture_screenshot(desktop_probe_talon_png_path),
+                success_message="Talon desktop probe PNG captured.",
+            )
+            self.run_step(
+                "Capture a PNG copy of the desktop probe with VNC",
+                lambda: talon_client.capture_screenshot(
+                    desktop_probe_vnc_png_path,
+                    vnc=True,
+                ),
+                success_message="VNC desktop probe PNG captured.",
             )
             self.run_step(
                 "Verify Talon can capture the complete desktop",
@@ -429,7 +446,6 @@ class SmokeTestRunner:
             raise click.ClickException(
                 f"VNC desktop capture had invalid dimensions: {vnc_path}"
             )
-
         total_pixels = talon_width * talon_height
         total_channel_diff = 0
         mismatched_pixels = 0
@@ -465,7 +481,8 @@ class SmokeTestRunner:
                 f"(maximum {DESKTOP_CAPTURE_MAX_MEAN_ABS_DIFF:.2f}); "
                 f"mismatched pixel ratio: {mismatch_ratio:.2%} "
                 f"(maximum {DESKTOP_CAPTURE_MAX_MISMATCH_RATIO:.2%}); "
-                f"Talon capture: {talon_path}; VNC capture: {vnc_path}"
+                f"Talon capture: {talon_path}; VNC capture: {vnc_path}; "
+                f"PNG copies should be saved next to those PPM files."
             )
 
     def count_marker_pixels(self, path: Path) -> tuple[int, int, int]:

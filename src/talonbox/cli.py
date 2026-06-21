@@ -111,7 +111,7 @@ def _is_url(value: str) -> bool:
 
 def _render_create_markdown(name: str, talon_dmg: str, base: str) -> str:
     quoted_name = shlex.quote(name)
-    quoted_lume_name = shlex.quote(to_lume_vm_name(name))
+    quoted_base = shlex.quote(base)
     quoted_lume_base = shlex.quote(to_lume_vm_name(base))
     quoted_talon_dmg = shlex.quote(talon_dmg)
     talon_dmg_setup = (
@@ -240,11 +240,11 @@ Then restart the base VM once and confirm it returns to a logged-in desktop.
 
 ## 5. Clone and start `{name}`
 
-After the base VM is complete, stop it and create the Talon VM from it. Use the rendered `talonbox-` prefixed names when working directly with `lume`; omit the prefix when running `talonbox` commands.
+After the base VM is complete, stop it and create the Talon VM from it. Use `talonbox clone`, not `lume clone`, so talonbox can apply its normal naming and clone warm-up behavior.
 
 ```bash
-lume stop {quoted_lume_base}
-lume clone {quoted_lume_base} {quoted_lume_name}
+talonbox stop {quoted_base}
+talonbox clone {quoted_base} {quoted_name}
 talonbox start --no-talon {quoted_name}
 ```
 
@@ -304,6 +304,14 @@ talonbox smoke-test --in-place {quoted_name}
 
 If the smoke test fails or appears blocked on a GUI prompt, take a screenshot through VNC to confirm whether it is a permission prompt or something else. Permissions dialogs can be accepted using `talonbox click --vnc` and `talonbox type --vnc`, but some prompts may be more easily handled by a human over VNC.
 
+After any permission click or typed confirmation, verify that the visible state actually changed. A successful input command only means the input was sent; macOS may show a second dialog, ignore the click because the sheet was not focused, or require keyboard confirmation. If an `Allow` button is focused but a click does not dismiss it, pressing Return through VNC can be a useful fallback:
+
+```bash
+talonbox screenshot --vnc {quoted_name} /tmp/permission-after-vnc.png
+talonbox screenshot {quoted_name} /tmp/permission-after-talon.png
+talonbox type --vnc {quoted_name} $'\\n'
+```
+
 Repeat the permission or prompt handling until `talonbox smoke-test --in-place {quoted_name}` passes. When in doubt, help the user connect to VNC:
 
 ```bash
@@ -316,6 +324,12 @@ It is expected that the user will need to grant permissions for:
 - Camera
 - Microphone
 - Screen & System Audio Recording, or any screen access prompt macOS shows
+
+After the in-place smoke test passes, take one more VNC screenshot before the reboot. If a permission prompt is still visible, clear it, verify it disappeared, and rerun the in-place smoke test before continuing:
+
+```bash
+talonbox screenshot --vnc {quoted_name} /tmp/before-reboot-vnc.png
+```
 
 ## 8. Reboot and stop the VM
 
@@ -739,7 +753,10 @@ def mimic(settings: CliSettings, name: str, command: str) -> None:
     help=(
         "Move the pointer to X,Y and click inside the VM.\n\n"
         "By default this uses Talon's mouse APIs and requires Talon's REPL. Use `--vnc` "
-        "to click through the VM's VNC connection instead."
+        "to click through the VM's VNC connection instead.\n\n"
+        "Coordinates match the chosen backend. Without `--vnc`, use coordinates from "
+        "Talon screenshots. With `--vnc`, use coordinates from `talonbox screenshot "
+        "--vnc`; VNC screenshots may be a different pixel size."
     ),
     epilog=_examples_epilog(
         "talonbox click experiment 400 300",
@@ -807,7 +824,10 @@ def type_command(settings: CliSettings, vnc: bool, name: str, text: str) -> None
         "Capture a VM screenshot, save it to a guest temp file, download it to a host "
         "path under `/tmp`, and remove the guest temp file.\n\n"
         "By default this uses Talon's screen capture API and requires Talon's REPL. Use "
-        "`--vnc` to capture the VNC framebuffer instead."
+        "`--vnc` to capture the VNC framebuffer instead.\n\n"
+        "The two screenshot modes may produce different pixel sizes. Use coordinates "
+        "from a Talon screenshot with `talonbox click`; use coordinates from a VNC "
+        "screenshot with `talonbox click --vnc`."
     ),
     epilog=_examples_epilog(
         "talonbox screenshot experiment /tmp/talon.png",
