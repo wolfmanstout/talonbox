@@ -15,6 +15,7 @@ from .smoke_test import SmokeTestRunner
 from .talon_client import TalonClient
 from .transfer import TransferService
 from .vm import VmController
+from .vnc_client import shutdown_vnc_reactor
 
 HELP_COMMAND_GROUPS = (
     (
@@ -389,6 +390,7 @@ talonbox smoke-test {quoted_name}
 @click.pass_context
 def cli(click_ctx: click.Context, debug: bool) -> None:
     _require_macos()
+    click_ctx.call_on_close(shutdown_vnc_reactor)
     click_ctx.obj = CliSettings(debug=debug)
 
 

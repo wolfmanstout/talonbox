@@ -47,6 +47,43 @@ def test_vnc_client_screenshot_captures_to_normalized_local_path(
     assert captures == [target]
 
 
+def test_vnc_client_screenshot_allows_repeated_captures_in_one_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, transfer_service, talon_client = build_service_stack()
+    vnc_client = VncClient(talon_client.running_vm, transfer_service)
+    captures: list[Path] = []
+    talon_client.running_vm.vnc_url = "vnc://127.0.0.1:63414"
+
+    class FakeVncConnection:
+        def __enter__(self) -> FakeVncConnection:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def captureScreen(self, path: str) -> None:
+            captures.append(Path(path))
+            Path(path).write_bytes(b"not-a-png")
+
+    monkeypatch.setattr(
+        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
+    )
+    monkeypatch.setattr(
+        "talonbox.vnc_client.vnc_api.connect",
+        lambda server, password=None, timeout=None: FakeVncConnection(),
+    )
+    monkeypatch.setattr(
+        "talonbox.vnc_client.vnc_api.shutdown",
+        lambda: pytest.fail("VNC operations must not stop Twisted's global reactor"),
+    )
+
+    vnc_client.capture_screenshot(tmp_path / "first.png")
+    vnc_client.capture_screenshot(tmp_path / "second.png")
+
+    assert captures == [tmp_path / "first.png", tmp_path / "second.png"]
+
+
 def test_vnc_client_click_uses_vncdotool_button_numbers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

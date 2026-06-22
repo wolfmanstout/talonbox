@@ -20,6 +20,10 @@ VNC_MOUSE_BUTTONS = {
 }
 
 
+def shutdown_vnc_reactor() -> None:
+    vnc_api.shutdown()
+
+
 class VncClient:
     def __init__(
         self, running_vm: RunningVm, transfer_service: TransferService
@@ -37,8 +41,6 @@ class VncClient:
             raise
         except Exception as error:
             raise click.ClickException(f"VNC screenshot failed: {error}") from None
-        finally:
-            vnc_api.shutdown()
 
     def click(self, x: int, y: int, *, button: str) -> None:
         try:
@@ -49,8 +51,6 @@ class VncClient:
             raise
         except Exception as error:
             raise click.ClickException(f"VNC click failed: {error}") from None
-        finally:
-            vnc_api.shutdown()
 
     def type_text(self, text: str) -> None:
         try:
@@ -61,8 +61,6 @@ class VncClient:
             raise
         except Exception as error:
             raise click.ClickException(f"VNC type failed: {error}") from None
-        finally:
-            vnc_api.shutdown()
 
     def _connect(self, *, timeout: float) -> Any:
         if not self.running_vm.vnc_url:

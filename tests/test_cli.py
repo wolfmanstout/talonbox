@@ -22,6 +22,20 @@ def test_version() -> None:
     assert result.output.startswith("talonbox, version ")
 
 
+def test_cli_closes_vnc_reactor_on_command_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli_module, "shutdown_vnc_reactor", lambda: calls.append("vnc"))
+
+    result = runner.invoke(cli, ["create", "experiment"])
+
+    assert result.exit_code == 0
+    assert calls == ["vnc"]
+
+
 def test_root_help_groups_commands_and_examples() -> None:
     runner = CliRunner()
 
