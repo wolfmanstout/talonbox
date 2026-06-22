@@ -37,7 +37,7 @@ pip install talonbox
 pipx install talonbox
 ```
 
-## Usage
+## Initial Setup
 
 `talonbox` is designed to be a CLI that you point your coding agent at when it
 needs to test Talon changes. The agent can clone a disposable VM, sync scripts
@@ -69,8 +69,27 @@ privacy permissions all need to line up. That setup friction is worth getting
 through, and it is not representative of the normal talonbox experience. Once a
 golden VM passes `smoke-test`, talonbox should feel fast and magical.
 
+When an agent creates a VM, it will try by default to do as much of the setup
+as it safely can, stopping for human-only steps such as accepting the Talon
+EULA. The first setup can take over an hour. To reduce repeated permission
+interruptions, consider allowlisting talonbox commands in your agent client,
+including `talonbox ...` and, when working from this checkout,
+`uv run talonbox ...`.
+
+If you would rather save wall-clock time and agent tokens, add this to the
+prompt. The tradeoff is that the agent will pause more often for manual VNC
+handoffs instead of working through GUI prompts itself:
+
+```text
+During VM creation, optimize for saving wall-clock time and agent tokens. When
+you reach a macOS or Talon GUI prompt, give me the VNC URL and
+`talonbox open NAME`, then wait for me instead of navigating it yourself.
+```
+
 The Lume VM user is `lume`, and the default Lume password is `lume`. The VM
 should auto-login, but you may occasionally need these for permissions dialogs.
+
+## Usage
 
 For top-level help, run:
 

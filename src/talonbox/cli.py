@@ -185,7 +185,7 @@ For a newly created base VM, run Lume's maintained setup preset as a separate st
 lume setup {quoted_lume_base} --unattended tahoe --debug --no-display
 ```
 
-If setup fails, have the agent inspect the debug directory named in Lume's output. The most useful files are usually the `FAILED` screenshot and its `-ocr.json` companion. These artifacts are for diagnosis only: when the agent is blocked on a macOS GUI setup screen, it should open the VM over VNC and ask the user to complete the visible setup step.
+If setup fails, have the agent inspect the debug directory named in Lume's output. The most useful files are usually the `FAILED` screenshot and its `-ocr.json` companion.
 
 To understand what the maintained preset was trying to do, have the agent inspect the installed Lume setup docs and preset:
 
@@ -206,12 +206,18 @@ The Lume VM user is `lume`, and the default Lume password is `lume`.
 
 Do not patch or edit Lume's unattended setup YAML during talonbox setup. If the maintained preset is stale for the current macOS Setup Assistant, use the YAML contents only to determine which setup steps remain. In particular, look for similar labels such as "Set Up Later", "Other Sign-In Options", or "Skip" when Apple Account setup appears. You may use `talonbox screenshot --vnc`, `talonbox click --vnc`, and `talonbox type --vnc` to complete Setup Assistant.
 
-Ask for the user's help before going in circles trying to resolve issues. If the VM is stopped, start it before opening VNC. Open the VM with the Mac Screen Sharing app, ask the user to finish Setup Assistant manually, and wait for the user to reply before continuing:
+Ask for the user's help before going in circles trying to resolve issues. When asking the user to do something over VNC, look up the VNC URL first, then give the user the actual `vnc://...` URL and the simple talonbox command that opens the viewer. For base setup recovery:
 
 ```bash
 lume run {quoted_lume_base}
-lume get {quoted_lume_base}
-open VNC_URL_FROM_LUME_GET
+talonbox status {quoted_base}
+```
+
+Then tell the user:
+
+```text
+VNC URL: vnc://...
+Open it with: talonbox open {quoted_base}
 ```
 
 Useful user-facing checklist for manual Setup Assistant recovery:
@@ -226,15 +232,17 @@ Useful user-facing checklist for manual Setup Assistant recovery:
 
 ## 4. Finalize and verify the base VM
 
-After SSH is available, the agent may apply any SSH-only `post_ssh_commands` from the installed Lume preset that did not run because setup was completed manually. Those commands commonly configure auto-login, `/etc/kcpassword`, screen saver and sleep settings, and auto-logout. Read them from the installed `tahoe.yml` before running them. This SSH configuration work can be handled by the agent; GUI Setup Assistant decisions should stay with the user over VNC.
+After SSH is available, prefer talonbox commands for the base VM. `talonbox start --no-talon` is useful if the base VM is stopped: it starts the VM in the background, waits for SSH, and applies talonbox's no-lock settings, but it does not launch Talon or wait for Talon's REPL. Prefer `talonbox stop` over `lume stop`, because talonbox can fall back to cleaning up the Lume run process if the graceful stop path fails.
+
+The agent may apply any SSH-only `post_ssh_commands` from the installed Lume preset that did not run because setup was completed manually. Those commands commonly configure auto-login, `/etc/kcpassword`, screen saver and sleep settings, and auto-logout. Read them from the installed `tahoe.yml` before running them. This SSH configuration work can be handled by the agent; GUI Setup Assistant decisions should stay with the user over VNC.
 
 Before cloning the base VM, verify it behaves like a completed unattended setup:
 
 ```bash
-lume ssh {quoted_lume_base} 'whoami'
-lume ssh {quoted_lume_base} 'sysadminctl -autologin status'
-lume ssh {quoted_lume_base} 'test -f /etc/kcpassword'
-lume ssh {quoted_lume_base} 'open -a Terminal'
+talonbox status {quoted_base}
+talonbox exec {quoted_base} -- whoami
+talonbox exec {quoted_base} -- sysadminctl -autologin status
+talonbox exec {quoted_base} -- test -f /etc/kcpassword
 ```
 
 Then restart the base VM once and confirm it returns to a logged-in desktop.
@@ -284,12 +292,7 @@ If Talon is blocked on first-run UI before its REPL is available, request a VNC 
 talonbox screenshot --vnc {quoted_name} /tmp/talon-first-run.png
 ```
 
-Open the VM with the Mac Screen Sharing app:
-
-```bash
-talonbox status {quoted_name}
-talonbox open {quoted_name}
-```
+When handing this step to the user, run `talonbox status {name}` yourself, then include the actual `vnc://...` URL and the command `talonbox open {name}` in the same message.
 
 The human user must review and accept the Talon EULA in the GUI manually. Agents must never try to accept the Talon EULA. Do not use `talonbox click --vnc`, `talonbox type --vnc`, AppleScript, keyboard automation, or any other automation to accept the Talon EULA.
 
@@ -313,10 +316,17 @@ talonbox screenshot {quoted_name} /tmp/permission-after-talon.png
 talonbox type --vnc {quoted_name} $'\\n'
 ```
 
-Repeat the permission or prompt handling until `talonbox smoke-test --in-place {quoted_name}` passes. When in doubt, help the user connect to VNC:
+Repeat the permission or prompt handling until `talonbox smoke-test --in-place {quoted_name}` passes. When in doubt, run `talonbox status {name}` yourself, then hand the step to the user with the actual VNC URL and viewer command:
 
 ```bash
-talonbox open {quoted_name}
+talonbox status {quoted_name}
+```
+
+Tell the user:
+
+```text
+VNC URL: vnc://...
+Open it with: talonbox open {quoted_name}
 ```
 
 It is expected that the user will need to grant permissions for:

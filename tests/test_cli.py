@@ -129,9 +129,8 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "LUME_BIN=" in result.output
     assert "/Applications /opt/homebrew /usr/local" in result.output
     assert "FAILED` screenshot and its `-ocr.json` companion" in result.output
-    assert "when the agent is blocked on a macOS GUI setup screen" in result.output
-    assert "open the VM over VNC and ask the user" in result.output
-    assert "wait for the user to reply before continuing" in result.output
+    assert "look up the VNC URL first" in result.output
+    assert "the actual `vnc://...` URL" in result.output
     assert "Do not patch or edit Lume's unattended setup YAML" in result.output
     assert "use the YAML contents only to determine which setup steps remain" in (
         result.output
@@ -139,20 +138,27 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "Other Sign-In Options" in result.output
     assert "to complete Setup Assistant" in result.output
     assert "lume run talonbox-tahoe-base" in result.output
-    assert "open VNC_URL_FROM_LUME_GET" in result.output
+    assert "talonbox status tahoe-base" in result.output
+    assert "talonbox open tahoe-base" in result.output
+    assert "VNC URL: vnc://..." in result.output
+    assert "Open it with: talonbox open tahoe-base" in result.output
     assert "Skip Apple Account sign-in" in result.output
     assert "The Lume VM user is `lume`" in result.output
     assert "the default Lume password is `lume`" in result.output
+    assert "After SSH is available, prefer talonbox commands" in result.output
+    assert "`talonbox start --no-talon` is useful if the base VM is stopped" in (
+        result.output
+    )
+    assert "Prefer `talonbox stop` over `lume stop`" in result.output
     assert "post_ssh_commands" in result.output
     assert "This SSH configuration work can be handled by the agent" in result.output
     assert (
         "GUI Setup Assistant decisions should stay with the user over VNC"
         in result.output
     )
-    assert (
-        "lume ssh talonbox-tahoe-base 'sysadminctl -autologin status'" in result.output
-    )
-    assert "lume ssh talonbox-tahoe-base 'test -f /etc/kcpassword'" in result.output
+    assert "talonbox exec tahoe-base -- sysadminctl -autologin status" in result.output
+    assert "talonbox exec tahoe-base -- test -f /etc/kcpassword" in result.output
+    assert "talonbox exec tahoe-base -- open -a Terminal" not in result.output
     assert "returns to a logged-in desktop" in result.output
     assert "Use `talonbox clone`, not `lume clone`" in result.output
     assert "talonbox stop tahoe-base" in result.output
@@ -179,6 +185,8 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "talonbox type --vnc" in result.output
     assert "talonbox status experiment" in result.output
     assert "talonbox open experiment" in result.output
+    assert "run `talonbox status experiment` yourself" in result.output
+    assert "include the actual `vnc://...` URL" in result.output
     assert "The human user must review and accept the Talon EULA" in result.output
     assert "Agents must never try to accept the Talon EULA." in result.output
     assert "Do not use `talonbox click --vnc`" in result.output
@@ -190,6 +198,9 @@ def test_create_command_prints_default_url_instructions() -> None:
     assert "Permissions dialogs can be accepted using" in result.output
     assert "more easily handled by a human over VNC" in result.output
     assert "After any permission click or typed confirmation" in result.output
+    assert "hand the step to the user with the actual VNC URL and viewer command" in (
+        result.output
+    )
     assert "talonbox screenshot --vnc experiment /tmp/permission-after-vnc.png" in (
         result.output
     )
