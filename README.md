@@ -164,10 +164,11 @@ loss, or unexpected host or VM changes.
 The guiding principles are:
 
 - No caller-triggered writes to host files outside `/tmp`. A `talonbox` command should not let its caller cause arbitrary host writes beyond that boundary.
-- No symlink escapes through `/tmp`; a symlink placed under `/tmp` should not be able to redirect writes outside the allowed boundary.
-- On macOS, treat `/private/tmp` as the canonical form of the same allowed temp root, not as a separate exception.
 - Prefer explicit guest/host boundaries. Remote paths must be written as `NAME:/...` so transfers stay easy to audit.
 - Favor VM-local execution first. Talon code should run in the guest and only copy explicit outputs back to the host.
+
+Talonbox VMs do have network access, so data exfiltration due to malicious 
+prompt injection is possible.
 
 ## Development
 
