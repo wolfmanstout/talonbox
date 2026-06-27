@@ -635,12 +635,13 @@ def smoke_test(settings: CliSettings, in_place: bool, source: str) -> None:
     help=(
         "Run a command on the VM over SSH.\n\n"
         "Place `--` before the remote command so talonbox stops parsing options.\n\n"
-        "For shell pipelines or redirects, pass a single quoted shell string."
+        "For shell pipelines, redirects, or multiline scripts, pass one quoted shell "
+        "string. Literal multiline quoted strings are often easiest to read."
     ),
     epilog=_examples_epilog(
         "talonbox exec experiment -- whoami",
         "talonbox exec experiment -- test -d ~/.talon/user",
-        "talonbox exec experiment -- pgrep -x Talon",
+        "talonbox exec experiment -- 'whoami\npwd'",
     ),
 )
 @click.argument("name", metavar="NAME")
@@ -719,15 +720,16 @@ def scp(settings: CliSettings, args: tuple[str, ...]) -> None:
 
 
 @cli.command(
-    short_help="Pipe Python into the VM's Talon REPL.",
+    short_help="Send Python to the VM's Talon REPL.",
     help=(
         "Send Python to the VM's Talon REPL.\n\n"
-        "Provide CODE as an argument or pipe Python on stdin. This command is intentionally "
-        "non-interactive."
+        "Pass CODE as a quoted argument. Literal multiline quoted strings are often "
+        "easiest to read. Piping Python on stdin is also supported for generated input. "
+        "This command is intentionally non-interactive."
     ),
     epilog=_examples_epilog(
         "talonbox repl experiment 'print(1+1)'",
-        "printf 'print(1+1)\\n' | talonbox repl experiment",
+        "talonbox repl experiment 'if True:\n    from talon import ui\n    print(ui.active_app())'",
     ),
 )
 @click.argument("name", metavar="NAME")

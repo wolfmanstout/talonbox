@@ -297,7 +297,10 @@ def test_exec_help_explains_double_dash_usage() -> None:
 
     assert result.exit_code == 0
     assert "Place `--` before the remote command" in result.output
+    assert "multiline scripts" in result.output
+    assert "Literal multiline quoted strings" in result.output
     assert "talonbox exec experiment -- whoami" in result.output
+    assert "talonbox exec experiment -- 'whoami\n  pwd'" in result.output
 
 
 def test_rsync_help_uses_quiet_vm_user_path_examples() -> None:
@@ -809,6 +812,22 @@ def test_repl_reads_stdin_when_no_code(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.exit_code == 0
     assert payloads == [("repl", "print(1)\n")]
+
+
+def test_repl_help_prefers_quoted_code_examples() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["repl", "--help"])
+
+    assert result.exit_code == 0
+    assert "Pass CODE as a quoted argument" in result.output
+    assert "Literal multiline quoted strings" in result.output
+    assert (
+        "talonbox repl experiment 'if True:\n"
+        "      from talon import ui\n"
+        "      print(ui.active_app())'" in result.output
+    )
+    assert "printf 'print(1+1)\\n' | talonbox repl experiment" not in result.output
 
 
 def test_exec_command_runs_guest_shell_and_propagates_exit_code(
