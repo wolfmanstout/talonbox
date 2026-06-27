@@ -73,7 +73,159 @@ def test_talon_client_mimic_uses_python_escaped_payload(
     talon_client.mimic('say "hello"\nworld')
 
     assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
-    assert payloads == ["mimic('say \"hello\"\\nworld')\n"]
+    assert payloads == ["mimic('say \"hello\" world')\n"]
+
+
+def test_talon_client_mimic_strips_embedded_speech_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, talon_client = build_service_stack()
+    payloads: list[str] = []
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: None,
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+
+    talon_client.mimic("talonbox [[slnc 500]] smoke [[rate 180]] [[volm +0.2]] test")
+
+    assert payloads == ["mimic('talonbox smoke test')\n"]
+
+
+def test_talon_client_mimic_audio_synthesizes_replays_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, talon_client = build_service_stack()
+    waits: list[tuple[str, float]] = []
+    shell_commands: list[str | list[str]] = []
+    payloads: list[str] = []
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: waits.append(
+            (talon_client.running_vm.ip_address, timeout)
+        ),
+    )
+
+    def fake_run_shell(
+        command: str | list[str],
+        *,
+        timeout: float | None = None,
+        poll: bool = False,
+        stream: bool = False,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        del timeout, poll, stream, check
+        shell_commands.append(command)
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(talon_client.running_vm, "run_shell", fake_run_shell)
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+    talon_client.mimic("talonbox [[slnc 500]] smoke test", audio=True)
+
+    assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
+    say_command = cast(list[str], shell_commands[0])
+    cleanup_command = cast(list[str], shell_commands[1])
+    assert say_command[0:4] == [
+        "say",
+        "-o",
+        say_command[2],
+        "--data-format=LEI16@16000",
+    ]
+    assert say_command[4] == "talonbox [[slnc 500]] smoke test"
+    assert say_command[2].startswith("/tmp/talonbox-mimic-audio-")
+    assert say_command[2].endswith(".wav")
+    assert "from talon import actions" in payloads[0]
+    assert "actions.speech.replay(path)" in payloads[0]
+    assert "time.sleep" not in payloads[0]
+    assert cleanup_command == ["rm", "-f", say_command[2]]
+
+
+def test_talon_client_mimic_audio_wraps_synthesis_failure_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, talon_client = build_service_stack()
+    shell_commands: list[str | list[str]] = []
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: None,
+    )
+
+    def fake_run_shell(
+        command: str | list[str],
+        *,
+        timeout: float | None = None,
+        poll: bool = False,
+        stream: bool = False,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        del timeout, poll, stream, check
+        shell_commands.append(command)
+        if isinstance(command, list) and command[0] == "say":
+            raise vm_module.RemoteCommandError("say failed")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(talon_client.running_vm, "run_shell", fake_run_shell)
+
+    with pytest.raises(click.ClickException, match="say failed"):
+        talon_client.mimic("talonbox smoke test", audio=True)
+
+    assert len(shell_commands) == 2
+    say_command = cast(list[str], shell_commands[0])
+    cleanup_command = cast(list[str], shell_commands[1])
+    assert cleanup_command == ["rm", "-f", say_command[2]]
+
+
+def test_talon_client_mimic_audio_propagates_replay_exit_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, talon_client = build_service_stack()
+    shell_commands: list[str | list[str]] = []
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: None,
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_shell",
+        lambda command, **kwargs: (
+            shell_commands.append(command) or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: subprocess.CompletedProcess(
+            [], 7, "", "replay failed"
+        ),
+    )
+
+    with pytest.raises(click.exceptions.Exit) as error:
+        talon_client.mimic("talonbox smoke test", audio=True)
+
+    assert error.value.exit_code == 7
+    say_command = cast(list[str], shell_commands[0])
+    cleanup_command = cast(list[str], shell_commands[1])
+    assert cleanup_command == ["rm", "-f", say_command[2]]
 
 
 def test_talon_client_click_uses_talon_mouse_api(

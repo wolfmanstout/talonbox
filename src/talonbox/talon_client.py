@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import uuid
 from pathlib import Path
@@ -15,6 +16,11 @@ TALON_MOUSE_BUTTONS = {
     "right": 1,
     "middle": 2,
 }
+EMBEDDED_SPEECH_COMMAND_RE = re.compile(r"\[\[.*?\]\]")
+
+
+def strip_embedded_speech_commands(command: str) -> str:
+    return " ".join(EMBEDDED_SPEECH_COMMAND_RE.sub(" ", command).split())
 
 
 class TalonClient:
@@ -37,13 +43,50 @@ class TalonClient:
         if result.returncode:
             raise click.exceptions.Exit(result.returncode)
 
-    def mimic(self, command: str) -> None:
+    def mimic(self, command: str, *, audio: bool = False) -> None:
+        if audio:
+            self.mimic_audio(command)
+            return
+
         self.running_vm.wait_for_talon_repl()
+        command = strip_embedded_speech_commands(command)
         result = self.running_vm.run_repl(
             f"mimic({command!r})\n",
         )
         if result.returncode:
             raise click.exceptions.Exit(result.returncode)
+
+    def mimic_audio(self, command: str) -> None:
+        self.running_vm.wait_for_talon_repl()
+        remote_path = f"/tmp/talonbox-mimic-audio-{uuid.uuid4().hex}.wav"
+        try:
+            self.running_vm.run_shell(
+                [
+                    "say",
+                    "-o",
+                    remote_path,
+                    "--data-format=LEI16@16000",
+                    command,
+                ]
+            )
+            code = "\n".join(
+                [
+                    "from talon import actions",
+                    f"path = {remote_path!r}",
+                    "actions.speech.replay(path)",
+                    "",
+                ]
+            )
+            result = self.running_vm.run_repl(f"exec({code!r})\n")
+            if result.returncode:
+                raise click.exceptions.Exit(result.returncode)
+        except (RemoteCommandError, TransportError) as error:
+            raise click.ClickException(str(error)) from None
+        finally:
+            try:
+                self.running_vm.run_shell(["rm", "-f", remote_path])
+            except (RemoteCommandError, TransportError):
+                pass
 
     def click(self, x: int, y: int, *, button: str = "left", vnc: bool = False) -> None:
         if vnc:

@@ -334,6 +334,50 @@ def test_mimic_help_works() -> None:
 
     assert result.exit_code == 0
     assert "Send one phrase to the VM's Talon REPL" in result.output
+    assert "--audio" in result.output
+    assert "[[slnc 500]]" in result.output
+
+
+def test_mimic_command_delegates_to_talon_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, str, bool]] = []
+
+    class FakeClient:
+        def mimic(self, command: str, *, audio: bool = False) -> None:
+            calls.append(("mimic", command, audio))
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
+    )
+
+    result = runner.invoke(cli, ["mimic", "experiment", "focus chrome"])
+
+    assert result.exit_code == 0
+    assert calls == [("mimic", "focus chrome", False)]
+
+
+def test_mimic_command_can_use_audio_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, str, bool]] = []
+
+    class FakeClient:
+        def mimic(self, command: str, *, audio: bool = False) -> None:
+            calls.append(("mimic", command, audio))
+
+    monkeypatch.setattr(
+        cli_module, "_build_talon_client", lambda settings, name: FakeClient()
+    )
+
+    result = runner.invoke(
+        cli, ["mimic", "--audio", "experiment", "talonbox [[slnc 500]] smoke test"]
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("mimic", "talonbox [[slnc 500]] smoke test", True)]
 
 
 def test_click_help_documents_vnc_mode() -> None:

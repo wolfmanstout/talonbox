@@ -746,17 +746,29 @@ def repl(settings: CliSettings, name: str, code: str | None) -> None:
 
 @cli.command(
     short_help="Run a voice command through Talon's mimic().",
-    help="Send one phrase to the VM's Talon REPL as `mimic(<phrase>)`.",
+    help=(
+        "Send one phrase to the VM's Talon REPL as `mimic(<phrase>)`.\n\n"
+        "Use `--audio` to synthesize the phrase inside the VM and replay the resulting "
+        "WAV through Talon's speech engine. Raw Apple embedded speech commands such as "
+        "`[[slnc 500]]` are passed through in audio mode and ignored otherwise."
+    ),
     epilog=_examples_epilog(
         "talonbox mimic experiment 'focus chrome'",
+        "talonbox mimic --audio experiment 'talonbox [[slnc 500]] smoke test'",
         "talonbox mimic experiment 'tab close'",
     ),
+)
+@click.option(
+    "--audio",
+    "audio",
+    is_flag=True,
+    help="Synthesize audio and replay it through Talon's speech engine.",
 )
 @click.argument("name", metavar="NAME")
 @click.argument("command", metavar="PHRASE")
 @pass_settings
-def mimic(settings: CliSettings, name: str, command: str) -> None:
-    _build_talon_client(settings, name).mimic(command)
+def mimic(settings: CliSettings, audio: bool, name: str, command: str) -> None:
+    _build_talon_client(settings, name).mimic(command, audio=audio)
 
 
 @cli.command(
