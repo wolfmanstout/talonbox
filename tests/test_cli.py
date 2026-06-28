@@ -339,6 +339,8 @@ def test_mimic_help_works() -> None:
     assert "Send one phrase to the VM's Talon REPL" in result.output
     assert "--audio" in result.output
     assert "[[slnc 500]]" in result.output
+    assert "Apple's archived Speech Manager reference" in result.output
+    assert cli_module.APPLE_SPEECH_MANAGER_REFERENCE_URL in result.output
 
 
 def test_mimic_command_delegates_to_talon_client(

@@ -39,6 +39,7 @@ HELP_COMMAND_GROUPS = (
 
 DEFAULT_TALON_DMG_URL = "https://talonvoice.com/dl/latest/talon-mac.dmg"
 DEFAULT_BASE_VM_NAME = "tahoe-base"
+APPLE_SPEECH_MANAGER_REFERENCE_URL = "https://developer.apple.com/library/archive/documentation/mac/pdf/Sound/Speech_Manager.pdf"
 
 
 def _examples_epilog(*examples: str) -> str:
@@ -748,11 +749,16 @@ def repl(settings: CliSettings, name: str, code: str | None) -> None:
 
 @cli.command(
     short_help="Run a voice command through Talon's mimic().",
+    context_settings={"max_content_width": 100},
     help=(
         "Send one phrase to the VM's Talon REPL as `mimic(<phrase>)`.\n\n"
         "Use `--audio` to synthesize the phrase inside the VM and replay the resulting "
         "WAV through Talon's speech engine. Raw Apple embedded speech commands such as "
-        "`[[slnc 500]]` are passed through in audio mode and ignored otherwise."
+        "`[[slnc 500]]` are passed through in audio mode and ignored otherwise.\n\n"
+        "\b\n"
+        "To learn more about commands available to the audio API, see Apple's archived "
+        "Speech Manager reference:\n"
+        f"{APPLE_SPEECH_MANAGER_REFERENCE_URL}"
     ),
     epilog=_examples_epilog(
         "talonbox mimic experiment 'focus chrome'",
