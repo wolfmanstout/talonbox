@@ -8,8 +8,8 @@ from pathlib import Path
 
 import click
 
-from . import lume
-from .names import to_lume_vm_name, to_public_vm_name, validate_public_vm_name
+from . import tart
+from .names import to_public_vm_name, to_tart_vm_name, validate_public_vm_name
 
 TALON_APP = "/Applications/Talon.app"
 TALON_LOG = "$HOME/.talon/talon.log"
@@ -45,8 +45,8 @@ def _timeout_output(value: str | bytes | None) -> str:
 
 
 class RunningVm:
-    SSH_USERNAME = "lume"
-    SSH_PASSWORD = "lume"
+    SSH_USERNAME = "admin"
+    SSH_PASSWORD = "admin"
     SSH_OPTIONS = [
         "-o",
         "StrictHostKeyChecking=no",
@@ -81,8 +81,8 @@ class RunningVm:
         self.debug = debug
         self.vnc_url = vnc_url
 
-    def to_vm_info(self) -> lume.VmInfo:
-        return lume.VmInfo(
+    def to_vm_info(self) -> tart.VmInfo:
+        return tart.VmInfo(
             name=self.name,
             status="running",
             ip_address=self.ip_address,
@@ -310,25 +310,25 @@ class RunningVm:
 class VmController:
     def __init__(self, vm: str, debug: bool) -> None:
         self.vm = validate_public_vm_name(vm)
-        self.lume_vm = to_lume_vm_name(self.vm)
+        self.tart_vm = to_tart_vm_name(self.vm)
         self.debug = debug
 
     def for_vm(self, vm: str) -> VmController:
         return type(self)(vm, self.debug)
 
     @classmethod
-    def list_vms(cls, *, debug: bool = False) -> list[lume.VmInfo]:
+    def list_vms(cls, *, debug: bool = False) -> list[tart.VmInfo]:
         try:
-            infos = lume.list_vms(debug=debug)
-        except lume.LumeError as error:
+            infos = tart.list_vms(debug=debug)
+        except tart.TartError as error:
             raise click.ClickException(str(error)) from None
-        public_infos: list[lume.VmInfo] = []
+        public_infos: list[tart.VmInfo] = []
         for info in infos:
             public_name = to_public_vm_name(info.name)
             if public_name is None:
                 continue
             public_infos.append(
-                lume.VmInfo(
+                tart.VmInfo(
                     name=public_name,
                     status=info.status,
                     ip_address=info.ip_address,
@@ -341,23 +341,23 @@ class VmController:
         if self.debug:
             click.echo(message, err=True)
 
-    def get_vm(self) -> lume.VmInfo:
-        info = self._get_lume_vm_info(self.lume_vm)
+    def get_vm(self) -> tart.VmInfo:
+        info = self._get_tart_vm_info(self.tart_vm)
         if info is None:
             raise click.ClickException(f"VM not found: {self.vm}")
         return self._public_vm_info(info)
 
-    def _get_lume_vm_info(self, name: str) -> lume.VmInfo | None:
+    def _get_tart_vm_info(self, name: str) -> tart.VmInfo | None:
         try:
-            return lume.get_vm_info(name, debug=self.debug)
-        except lume.LumeError as error:
+            return tart.get_vm_info(name, debug=self.debug)
+        except tart.TartError as error:
             raise click.ClickException(str(error)) from None
 
     def get_running_vm(self) -> RunningVm:
         info = self.get_vm()
         return self._running_vm_from_info(info)
 
-    def format_vm_info(self, info: lume.VmInfo) -> list[str]:
+    def format_vm_info(self, info: tart.VmInfo) -> list[str]:
         lines = [f"name: {info.name}", f"status: {info.status}"]
         if info.status == "running" and info.ip_address:
             lines.extend(
@@ -380,48 +380,46 @@ class VmController:
         source_info = self.get_vm()
         if source_info.status != "stopped":
             raise click.ClickException(
-                f"Source VM must be stopped before cloning: {self.vm} ({source_info.status})"
+                f"Source VM must be stopped before cloning: {self.vm} ({source_info.status}). "
+                f"Run `talonbox stop --shutdown {self.vm}` first."
             )
-        dest_lume_vm = to_lume_vm_name(dest)
-        if self._get_lume_vm_info(dest_lume_vm) is not None:
+        dest_tart_vm = to_tart_vm_name(dest)
+        if self._get_tart_vm_info(dest_tart_vm) is not None:
             raise click.ClickException(f"Destination VM already exists: {dest}")
         try:
-            lume.clone_vm(self.lume_vm, dest_lume_vm, debug=self.debug)
-        except lume.LumeError as error:
+            tart.clone_vm(self.tart_vm, dest_tart_vm, debug=self.debug)
+        except tart.TartError as error:
             raise click.ClickException(str(error)) from None
-        self._warm_cloned_vm(dest)
 
     def rename(self, dest: str) -> None:
-        self.clone(dest)
-        self.delete()
+        dest = validate_public_vm_name(dest)
+        if self.vm == dest:
+            raise click.ClickException(
+                f"Source and destination VM must be different: {self.vm}"
+            )
+        source_info = self.get_vm()
+        if not self._is_inactive(source_info.status):
+            raise click.ClickException(
+                f"Source VM must be stopped or suspended before renaming: {self.vm} ({source_info.status})"
+            )
+        dest_tart_vm = to_tart_vm_name(dest)
+        if self._get_tart_vm_info(dest_tart_vm) is not None:
+            raise click.ClickException(f"Destination VM already exists: {dest}")
+        try:
+            tart.rename_vm(self.tart_vm, dest_tart_vm, debug=self.debug)
+        except tart.TartError as error:
+            raise click.ClickException(str(error)) from None
 
     def delete(self) -> None:
         info = self.get_vm()
-        if info.status != "stopped":
+        if not self._is_inactive(info.status):
             raise click.ClickException(
-                f"VM must be stopped before deleting: {self.vm} ({info.status})"
+                f"VM must be stopped or suspended before deleting: {self.vm} ({info.status})"
             )
         try:
-            lume.delete_vm(self.lume_vm, debug=self.debug)
-        except lume.LumeError as error:
+            tart.delete_vm(self.tart_vm, debug=self.debug)
+        except tart.TartError as error:
             raise click.ClickException(str(error)) from None
-
-    def _warm_cloned_vm(self, dest: str) -> None:
-        clone = self.for_vm(dest)
-        try:
-            # Fresh Tahoe clones can show Apple Account setup on first boot.
-            # Boot once so macOS can settle that clone state, then leave the VM
-            # stopped for callers.
-            clone.start(require_talon=False)
-            clone.stop()
-        except click.ClickException as error:
-            try:
-                clone.stop()
-            except click.ClickException as stop_error:
-                self.debug_log(f"clone warm-up cleanup stop failed: {stop_error}")
-            raise click.ClickException(
-                f"Cloned VM was created, but warm-up failed: {error}"
-            ) from None
 
     def start(self, *, require_talon: bool = True) -> RunningVm:
         info = self.get_vm()
@@ -430,14 +428,14 @@ class VmController:
             if info.status == "running":
                 ready_info = info
             else:
-                if info.status != "stopped":
+                if not self._is_inactive(info.status):
                     raise click.ClickException(
-                        f"VM is not stopped: {self.vm} ({info.status})"
+                        f"VM is not stopped or suspended: {self.vm} ({info.status})"
                     )
-                launch = lume.spawn_vm(self.lume_vm, debug=self.debug)
+                launch = tart.spawn_vm(self.tart_vm, debug=self.debug)
                 ready_info = self._public_vm_info(
-                    lume.wait_for_running_vm(
-                        self.lume_vm,
+                    tart.wait_for_running_vm(
+                        self.tart_vm,
                         timeout=START_TIMEOUT_SECONDS,
                         debug=self.debug,
                         launch=launch,
@@ -450,7 +448,7 @@ class VmController:
                 running_vm.ensure_talon_running()
         except click.ClickException:
             raise
-        except lume.LumeError as error:
+        except tart.TartError as error:
             if launch is not None and launch.process.poll() is None:
                 self._cleanup_failed_start()
             raise click.ClickException(self._format_start_error(str(error))) from None
@@ -460,7 +458,7 @@ class VmController:
             raise click.ClickException(str(error)) from None
 
         if launch is not None:
-            lume.cleanup_launch_log(launch.log_path)
+            tart.cleanup_launch_log(launch.log_path)
         return running_vm
 
     def restart_talon(
@@ -469,40 +467,42 @@ class VmController:
         wipe_user_dir: bool,
         clean_logs: bool,
     ) -> None:
-        self.get_running_vm().restart_talon(
-            wipe_user_dir=wipe_user_dir,
-            clean_logs=clean_logs,
-        )
+        try:
+            self.get_running_vm().restart_talon(
+                wipe_user_dir=wipe_user_dir,
+                clean_logs=clean_logs,
+            )
+        except (RemoteCommandError, TransportError) as error:
+            raise click.ClickException(str(error)) from None
 
-    def stop(self) -> None:
+    def stop(self, *, shutdown: bool = False) -> None:
         info = self.get_vm()
-        if info.status == "stopped":
+        if info.status == "stopped" or (info.status == "suspended" and not shutdown):
             return
 
         try:
-            lume.stop_vm(self.lume_vm, debug=self.debug)
-            lume.wait_for_status(
-                self.lume_vm, "stopped", timeout=60.0, debug=self.debug
-            )
-        except lume.LumeError as error:
-            self.debug_log(f"graceful stop failed: {error}")
-            try:
-                lume.force_stop_vm(self.lume_vm, debug=self.debug)
-                lume.wait_for_status(
-                    self.lume_vm, "stopped", timeout=20.0, debug=self.debug
+            if shutdown:
+                tart.shutdown_vm(self.tart_vm, debug=self.debug)
+                tart.wait_for_status(
+                    self.tart_vm, "stopped", timeout=60.0, debug=self.debug
                 )
-            except lume.LumeError as force_error:
-                raise click.ClickException(str(force_error)) from None
+            else:
+                tart.suspend_vm(self.tart_vm, debug=self.debug)
+                tart.wait_for_status(
+                    self.tart_vm, "suspended", timeout=60.0, debug=self.debug
+                )
+        except tart.TartError as error:
+            raise click.ClickException(str(error)) from None
 
     def _cleanup_failed_start(self) -> None:
-        self.debug_log("start failed; stopping VM")
+        self.debug_log("start failed; suspending VM")
         try:
-            lume.stop_vm(self.lume_vm, debug=self.debug)
-            lume.wait_for_status(
-                self.lume_vm, "stopped", timeout=30.0, debug=self.debug
+            tart.suspend_vm(self.tart_vm, debug=self.debug)
+            tart.wait_for_status(
+                self.tart_vm, "suspended", timeout=30.0, debug=self.debug
             )
-        except lume.LumeError as error:
-            self.debug_log(f"cleanup stop failed: {error}")
+        except tart.TartError as error:
+            self.debug_log(f"cleanup suspend failed: {error}")
 
     def _format_start_error(self, message: str) -> str:
         lower_message = message.lower()
@@ -521,26 +521,26 @@ class VmController:
             try:
                 running_count = sum(
                     1
-                    for info in lume.list_vms(debug=self.debug)
+                    for info in tart.list_vms(debug=self.debug)
                     if info.status == "running"
                 )
-            except lume.LumeError:
+            except tart.TartError:
                 running_count = 0
             should_hint = running_count >= 2
         if should_hint and CONCURRENCY_LIMIT_HINT not in message:
             return f"{message}\nHINT {CONCURRENCY_LIMIT_HINT}"
         return message
 
-    def _public_vm_info(self, info: lume.VmInfo) -> lume.VmInfo:
+    def _public_vm_info(self, info: tart.VmInfo) -> tart.VmInfo:
         public_name = to_public_vm_name(info.name) or info.name
-        return lume.VmInfo(
+        return tart.VmInfo(
             name=public_name,
             status=info.status,
             ip_address=info.ip_address,
             vnc_url=info.vnc_url,
         )
 
-    def _running_vm_from_info(self, info: lume.VmInfo) -> RunningVm:
+    def _running_vm_from_info(self, info: tart.VmInfo) -> RunningVm:
         if info.status != "running" or not info.ip_address:
             raise click.ClickException(f"VM is not running: {self.vm}")
         return RunningVm(
@@ -549,3 +549,7 @@ class VmController:
             debug=self.debug,
             vnc_url=info.vnc_url,
         )
+
+    @staticmethod
+    def _is_inactive(status: str) -> bool:
+        return status in {"stopped", "suspended"}

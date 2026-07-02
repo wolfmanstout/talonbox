@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import click
 import pytest
 
-from talonbox.lume import VmInfo
 from talonbox.smoke_test import SmokeTestRunner
+from talonbox.tart import VmInfo
 from talonbox.transfer import TransferService
 from tests.helpers import build_service_stack, running_vm_fixture
 
@@ -16,11 +17,11 @@ def write_ppm(path: Path, width: int, height: int, pixels: bytes) -> None:
 
 
 @pytest.fixture(autouse=True)
-def forbid_real_lume_cli(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail_run_lume(*args: object, **kwargs: object) -> None:
-        pytest.fail("smoke-test unit tests must mock Lume interactions")
+def forbid_real_tart_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_run_tart(*args: object, **kwargs: object) -> None:
+        pytest.fail("smoke-test unit tests must mock Tart interactions")
 
-    monkeypatch.setattr("talonbox.lume._run_lume", fail_run_lume)
+    monkeypatch.setattr("talonbox.tart._run_tart", fail_run_tart)
 
 
 def test_write_smoke_test_bundle_includes_marker_and_visual_actions(
@@ -116,9 +117,16 @@ def test_run_marker_mimic_until_verified_fails_after_bounded_retries(
             click.ClickException("marker missing")
         ),
     )
+    monkeypatch.setattr(
+        runner,
+        "diagnose_mimic_failure",
+        lambda running_vm_arg,
+        marker_path,
+        token: " Confirm a speech model is selected.",
+    )
     monkeypatch.setattr("talonbox.smoke_test.time.sleep", lambda delay: None)
 
-    with pytest.raises(click.ClickException, match="after 3 mimic attempts"):
+    with pytest.raises(click.ClickException, match="speech model"):
         runner.run_marker_mimic_until_verified(
             FakeClient(),
             running_vm,
@@ -133,6 +141,51 @@ def test_run_marker_mimic_until_verified_fails_after_bounded_retries(
         "talonbox smoke test",
         "talonbox smoke test",
     ]
+
+
+def test_run_marker_mimic_until_verified_diagnoses_missing_speech_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    running_vm = running_vm_fixture()
+
+    class FakeClient:
+        def mimic(self, command: str) -> None:
+            return None
+
+    monkeypatch.setattr(
+        runner,
+        "verify_marker",
+        lambda running_vm_arg, marker_path, token: (_ for _ in ()).throw(
+            click.ClickException("marker missing")
+        ),
+    )
+    monkeypatch.setattr("talonbox.smoke_test.time.sleep", lambda delay: None)
+    monkeypatch.setattr(
+        running_vm,
+        "run_repl",
+        lambda payload: subprocess.CompletedProcess(
+            [],
+            0,
+            "talonbox_direct_action_ok=True\n",
+            "",
+        ),
+    )
+
+    with pytest.raises(click.ClickException) as error:
+        runner.run_marker_mimic_until_verified(
+            FakeClient(),
+            running_vm,
+            "/tmp/marker.txt",
+            "token",
+            attempts=1,
+            retry_delay=0,
+        )
+
+    assert "action is loaded and works when called directly" in error.value.message
+    assert "Speech Recognition" in error.value.message
+    assert "selected model" in error.value.message
 
 
 def test_verify_visual_marker_present_accepts_marker_colors(tmp_path: Path) -> None:
@@ -241,6 +294,22 @@ def test_start_desktop_capture_probe_shows_dialog_asynchronously(
     assert sleeps == [1.0]
 
 
+def test_close_desktop_capture_probe_kills_only_smoke_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    running_vm = running_vm_fixture()
+    calls: list[str] = []
+    monkeypatch.setattr(running_vm, "run_shell", lambda command: calls.append(command))
+
+    runner.close_desktop_capture_probe(running_vm)
+
+    assert calls == [
+        "pkill -f 'talonbox desktop capture [p]robe' >/dev/null 2>&1 || true"
+    ]
+
+
 def test_smoke_test_runner_rejects_running_source_without_mutating_it(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -277,6 +346,7 @@ def test_smoke_test_runner_rejects_running_source_without_mutating_it(
     captured = capsys.readouterr()
     assert error.value.exit_code == 1
     assert "Source VM must be stopped before smoke-test" in captured.out
+    assert "talonbox stop --shutdown talon-test" in captured.out
 
 
 def test_smoke_test_runner_success_runs_end_to_end(
@@ -366,6 +436,11 @@ def test_smoke_test_runner_success_runs_end_to_end(
     )
     monkeypatch.setattr(
         runner,
+        "close_desktop_capture_probe",
+        lambda running_vm_arg: steps.append("close_desktop_probe"),
+    )
+    monkeypatch.setattr(
+        runner,
         "trigger_visual_change",
         lambda talon_client_arg: steps.append("show_visual_change"),
     )
@@ -401,6 +476,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "capture-vnc:screenshot-desktop-probe-vnc.ppm",
         "capture:screenshot-desktop-probe-talon.png",
         "capture-vnc:screenshot-desktop-probe-vnc.png",
+        "close_desktop_probe",
         "verify_complete_capture",
         "mimic_until_marker",
         "capture:screenshot-before-visual-change.png",
@@ -498,6 +574,11 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
     )
     monkeypatch.setattr(
         runner,
+        "close_desktop_capture_probe",
+        lambda running_vm_arg: steps.append("close_desktop_probe"),
+    )
+    monkeypatch.setattr(
+        runner,
         "trigger_visual_change",
         lambda talon_client_arg: steps.append("show_visual_change"),
     )
@@ -530,6 +611,7 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         "capture-vnc:screenshot-desktop-probe-vnc.ppm",
         "capture:screenshot-desktop-probe-talon.png",
         "capture-vnc:screenshot-desktop-probe-vnc.png",
+        "close_desktop_probe",
         "verify_complete_capture",
         "mimic_until_marker",
         "capture:screenshot-before-visual-change.png",
@@ -673,6 +755,11 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
         runner,
         "verify_talon_capture_matches_vnc",
         lambda talon_screenshot, vnc_screenshot: None,
+    )
+    monkeypatch.setattr(
+        runner,
+        "close_desktop_capture_probe",
+        lambda running_vm_arg: None,
     )
     monkeypatch.setattr(temp_controller, "stop", lambda: stop_calls.append("stop"))
     monkeypatch.setattr(temp_controller, "delete", lambda: stop_calls.append("delete"))

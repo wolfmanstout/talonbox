@@ -382,9 +382,51 @@ def test_talon_client_screenshot_preserves_requested_capture_suffix(
     assert len(downloads) == 1
     assert downloads[0][1] == target
     assert downloads[0][0].endswith(".ppm")
-    assert "img.read_pixels(0, 0, img.width, img.height)" in repl_payloads[0]
+    assert "pixels = bytes(img.__array_interface__['data'])" in repl_payloads[0]
+    assert "rgb[target] = pixels[source]" in repl_payloads[0]
+    assert "rgb[target + 2] = pixels[source + 2]" in repl_payloads[0]
+    assert "rgb[target] = pixels[source + 2]" not in repl_payloads[0]
     assert "header = f" in repl_payloads[0]
     assert "P6\\\\n" in repl_payloads[0]
+
+
+def test_talon_client_screenshot_surfaces_repl_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, transfer_service, talon_client = build_service_stack()
+    target = tmp_path / "shots" / "screen.ppm"
+
+    monkeypatch.setattr(
+        transfer_service, "_host_output_root", lambda: tmp_path.resolve()
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=0: None,
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: subprocess.CompletedProcess(
+            [],
+            0,
+            "Traceback (most recent call last):\nRuntimeError: capture failed\n",
+            "",
+        ),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "download",
+        lambda remote, local: pytest.fail("download should not run after traceback"),
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_shell",
+        lambda command, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    with pytest.raises(click.ClickException, match="capture failed"):
+        talon_client.capture_screenshot(target)
 
 
 def test_talon_client_screenshot_requires_talon_repl_by_default(

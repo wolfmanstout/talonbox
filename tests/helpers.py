@@ -6,21 +6,21 @@ from typing import cast
 
 import pytest
 
-from talonbox import lume as lume_module
+from talonbox import tart as tart_module
 from talonbox import vm as vm_module
-from talonbox.lume import VmInfo
 from talonbox.talon_client import TalonClient
+from talonbox.tart import VmInfo
 from talonbox.transfer import TransferService
 from talonbox.vm import RunningVm, VmController
 
 
 def fake_launch(
     log_path: Path = Path("/tmp/talonbox-test.log"),
-) -> lume_module.VmLaunch:
+) -> tart_module.VmLaunch:
     process = cast(
         subprocess.Popen[bytes], type("Process", (), {"poll": lambda self: None})()
     )
-    return lume_module.VmLaunch(process=process, log_path=log_path)
+    return tart_module.VmLaunch(process=process, log_path=log_path)
 
 
 def set_vm_statuses(
@@ -34,7 +34,7 @@ def set_vm_statuses(
         status, ip_address = remaining[0] if len(remaining) == 1 else remaining.pop(0)
         return VmInfo(vm, status, ip_address)
 
-    monkeypatch.setattr(vm_module.lume, "get_vm_info", fake_get_vm_info)
+    monkeypatch.setattr(vm_module.tart, "get_vm_info", fake_get_vm_info)
 
 
 def build_service_stack(

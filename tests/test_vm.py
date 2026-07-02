@@ -6,16 +6,15 @@ from pathlib import Path
 import click
 import pytest
 
-from talonbox import lume as lume_module
 from talonbox import vm as vm_module
-from talonbox.lume import VmInfo
-from talonbox.names import to_lume_vm_name, to_public_vm_name
+from talonbox.names import to_public_vm_name, to_tart_vm_name
+from talonbox.tart import VmInfo
 from talonbox.vm import VmController
 from tests.helpers import fake_launch, running_vm_fixture, set_vm_statuses
 
 
-def test_name_helpers_prefix_and_strip_lume_names() -> None:
-    assert to_lume_vm_name("experiment") == "talonbox-experiment"
+def test_name_helpers_prefix_and_strip_tart_names() -> None:
+    assert to_tart_vm_name("experiment") == "talonbox-experiment"
     assert to_public_vm_name("talonbox-experiment") == "experiment"
     assert to_public_vm_name("other") is None
 
@@ -29,7 +28,7 @@ def test_vm_controller_list_filters_and_strips_talonbox_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "list_vms",
         lambda debug=False: [
             VmInfo("not-talonbox", "stopped", None),
@@ -55,8 +54,8 @@ def test_vm_controller_format_vm_info_includes_name_and_vnc() -> None:
         "name: talon-test",
         "status: running",
         "ip: 192.168.64.10",
-        "username: lume",
-        "password: lume",
+        "username: admin",
+        "password: admin",
         "vnc: vnc://127.0.0.1:5901",
     ]
 
@@ -65,7 +64,7 @@ def test_vm_controller_clone_requires_stopped_source_and_empty_dest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vm_controller = VmController("golden", False)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[object, ...]] = []
 
     def fake_get_vm_info(vm: str, debug: bool = False) -> VmInfo | None:
         del debug
@@ -74,9 +73,9 @@ def test_vm_controller_clone_requires_stopped_source_and_empty_dest(
             return VmInfo(vm, "stopped", None)
         return None
 
-    monkeypatch.setattr(vm_module.lume, "get_vm_info", fake_get_vm_info)
+    monkeypatch.setattr(vm_module.tart, "get_vm_info", fake_get_vm_info)
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "clone_vm",
         lambda source, target, debug=False: calls.append(
             ("clone_vm", (source, target))
@@ -85,25 +84,14 @@ def test_vm_controller_clone_requires_stopped_source_and_empty_dest(
     monkeypatch.setattr(
         vm_module.VmController,
         "start",
-        lambda self, require_talon=True: calls.append(
-            ("start", (self.vm, require_talon))
-        )
-        or running_vm_fixture(),
-    )
-    monkeypatch.setattr(
-        vm_module.VmController,
-        "stop",
-        lambda self: calls.append(("stop", self.vm)),
+        lambda self, require_talon=True: pytest.fail("clone should not warm up"),
     )
 
     vm_controller.clone("experiment")
-
     assert calls == [
         ("get_vm_info", "talonbox-golden"),
         ("get_vm_info", "talonbox-experiment"),
         ("clone_vm", ("talonbox-golden", "talonbox-experiment")),
-        ("start", ("experiment", False)),
-        ("stop", "experiment"),
     ]
 
 
@@ -112,20 +100,22 @@ def test_vm_controller_clone_rejects_running_source(
 ) -> None:
     vm_controller = VmController("golden", False)
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "get_vm_info",
         lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
     )
 
-    with pytest.raises(click.ClickException, match="must be stopped"):
+    with pytest.raises(click.ClickException) as error:
         vm_controller.clone("experiment")
+    assert "Source VM must be stopped before cloning" in error.value.message
+    assert "talonbox stop --shutdown golden" in error.value.message
 
 
-def test_vm_controller_rename_clones_then_deletes_source(
+def test_vm_controller_rename_uses_native_tart_rename(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vm_controller = VmController("experiment", False)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[object, ...]] = []
 
     def fake_get_vm_info(vm: str, debug: bool = False) -> VmInfo | None:
         del debug
@@ -134,31 +124,18 @@ def test_vm_controller_rename_clones_then_deletes_source(
             return VmInfo(vm, "stopped", None)
         return None
 
-    monkeypatch.setattr(vm_module.lume, "get_vm_info", fake_get_vm_info)
+    monkeypatch.setattr(vm_module.tart, "get_vm_info", fake_get_vm_info)
     monkeypatch.setattr(
-        vm_module.lume,
-        "clone_vm",
+        vm_module.tart,
+        "rename_vm",
         lambda source, target, debug=False: calls.append(
-            ("clone_vm", (source, target))
+            ("rename_vm", (source, target))
         ),
     )
     monkeypatch.setattr(
-        vm_module.lume,
-        "delete_vm",
-        lambda vm, debug=False: calls.append(("delete_vm", vm)),
-    )
-    monkeypatch.setattr(
-        vm_module.VmController,
-        "start",
-        lambda self, require_talon=True: calls.append(
-            ("start", (self.vm, require_talon))
-        )
-        or running_vm_fixture(),
-    )
-    monkeypatch.setattr(
-        vm_module.VmController,
-        "stop",
-        lambda self: calls.append(("stop", self.vm)),
+        vm_module.tart,
+        "clone_vm",
+        lambda source, target, debug=False: pytest.fail("rename should not clone"),
     )
 
     vm_controller.rename("experiment-old")
@@ -166,11 +143,7 @@ def test_vm_controller_rename_clones_then_deletes_source(
     assert calls == [
         ("get_vm_info", "talonbox-experiment"),
         ("get_vm_info", "talonbox-experiment-old"),
-        ("clone_vm", ("talonbox-experiment", "talonbox-experiment-old")),
-        ("start", ("experiment-old", False)),
-        ("stop", "experiment-old"),
-        ("get_vm_info", "talonbox-experiment"),
-        ("delete_vm", "talonbox-experiment"),
+        ("rename_vm", ("talonbox-experiment", "talonbox-experiment-old")),
     ]
 
 
@@ -182,7 +155,7 @@ def test_vm_controller_delete_refuses_non_stopped_vm(
     vm_controller = VmController("experiment", False)
     delete_calls: list[str] = []
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "get_vm_info",
         lambda vm, debug=False: VmInfo(
             vm,
@@ -191,7 +164,7 @@ def test_vm_controller_delete_refuses_non_stopped_vm(
         ),
     )
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "delete_vm",
         lambda vm, debug=False: delete_calls.append(vm),
     )
@@ -207,12 +180,33 @@ def test_vm_controller_delete_uses_prefixed_name(
     vm_controller = VmController("experiment", False)
     calls: list[str] = []
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "get_vm_info",
         lambda vm, debug=False: VmInfo(vm, "stopped", None),
     )
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
+        "delete_vm",
+        lambda vm, debug=False: calls.append(vm),
+    )
+
+    vm_controller.delete()
+
+    assert calls == ["talonbox-experiment"]
+
+
+def test_vm_controller_delete_accepts_suspended_vm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        vm_module.tart,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "suspended", None),
+    )
+    monkeypatch.setattr(
+        vm_module.tart,
         "delete_vm",
         lambda vm, debug=False: calls.append(vm),
     )
@@ -226,26 +220,26 @@ def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vm_controller = VmController("experiment", False)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[object, ...]] = []
     probe_calls: list[float] = []
     idle_lock_calls: list[str] = []
     ensure_calls: list[str] = []
     running_vm = running_vm_fixture()
 
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "get_vm_info",
         lambda vm, debug=False: (
             calls.append(("get_vm_info", vm)) or VmInfo(vm, "stopped", None)
         ),
     )
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "spawn_vm",
         lambda vm, debug=False: calls.append(("spawn_vm", vm)) or fake_launch(),
     )
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "wait_for_running_vm",
         lambda vm, timeout, debug=False, launch=None: (
             calls.append(("wait_for_running_vm", vm))
@@ -268,7 +262,7 @@ def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
         "ensure_talon_running",
         lambda: ensure_calls.append("ensure_talon_running"),
     )
-    monkeypatch.setattr(vm_module.lume, "cleanup_launch_log", lambda log_path: None)
+    monkeypatch.setattr(vm_module.tart, "cleanup_launch_log", lambda log_path: None)
 
     assert vm_controller.start() is running_vm
     assert calls == [
@@ -289,12 +283,12 @@ def test_vm_controller_start_reuses_running_vm_without_spawn(
     spawn_calls: list[str] = []
 
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "get_vm_info",
         lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
     )
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "spawn_vm",
         lambda vm, debug=False: spawn_calls.append(vm) or fake_launch(),
     )
@@ -315,7 +309,7 @@ def test_vm_controller_start_can_skip_talon_launch(
     ensure_calls: list[str] = []
 
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "get_vm_info",
         lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
     )
@@ -341,12 +335,12 @@ def test_vm_controller_start_cleans_up_failed_launch(
 
     set_vm_statuses(monkeypatch, ("stopped", None))
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "spawn_vm",
         lambda vm, debug=False: fake_launch(),
     )
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "wait_for_running_vm",
         lambda vm, timeout, debug=False, launch=None: VmInfo(
             vm, "running", "192.168.64.10"
@@ -360,22 +354,26 @@ def test_vm_controller_start_cleans_up_failed_launch(
 
     monkeypatch.setattr(running_vm, "probe_ssh", fail_probe)
     monkeypatch.setattr(
-        vm_module.lume,
-        "stop_vm",
-        lambda vm, debug=False: calls.append(("stop_vm", vm)),
+        vm_module.tart,
+        "suspend_vm",
+        lambda vm, debug=False: calls.append(("suspend_vm", vm)),
     )
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "wait_for_status",
         lambda vm, status, timeout, debug=False: (
-            calls.append(("wait_for_status", timeout)) or VmInfo(vm, "stopped", None)
+            calls.append(("wait_for_status", status, timeout))
+            or VmInfo(vm, "suspended", None)
         ),
     )
 
     with pytest.raises(click.ClickException, match="ssh failed: 192.168.64.10"):
         vm_controller.start()
 
-    assert calls == [("stop_vm", "talonbox-talon-test"), ("wait_for_status", 30.0)]
+    assert calls == [
+        ("suspend_vm", "talonbox-talon-test"),
+        ("wait_for_status", "suspended", 30.0),
+    ]
 
 
 def test_vm_controller_formats_concurrency_hint_when_two_vms_are_running(
@@ -383,7 +381,7 @@ def test_vm_controller_formats_concurrency_hint_when_two_vms_are_running(
 ) -> None:
     vm_controller = VmController("experiment", False)
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "list_vms",
         lambda debug=False: [
             VmInfo("talonbox-one", "running", "192.168.64.10"),
@@ -391,8 +389,8 @@ def test_vm_controller_formats_concurrency_hint_when_two_vms_are_running(
         ],
     )
 
-    assert vm_controller._format_start_error("lume run exited") == (
-        "lume run exited\n"
+    assert vm_controller._format_start_error("tart run exited") == (
+        "tart run exited\n"
         "HINT macOS Virtualization commonly allows only 2 running VMs; stop another VM and retry."
     )
 
@@ -401,7 +399,7 @@ def test_running_vm_restart_talon_waits_for_repl_and_sleeps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     running_vm = running_vm_fixture()
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[object, ...]] = []
     sleeps: list[float] = []
 
     monkeypatch.setattr(
@@ -466,6 +464,24 @@ def test_running_vm_restart_talon_retries_transient_launch_failure(
     ]
 
 
+def test_vm_controller_restart_talon_reports_click_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    running_vm = running_vm_fixture()
+    monkeypatch.setattr(vm_controller, "get_running_vm", lambda: running_vm)
+    monkeypatch.setattr(
+        running_vm,
+        "restart_talon",
+        lambda *, wipe_user_dir, clean_logs: (_ for _ in ()).throw(
+            vm_module.RemoteCommandError("repl not ready")
+        ),
+    )
+
+    with pytest.raises(click.ClickException, match="repl not ready"):
+        vm_controller.restart_talon(wipe_user_dir=False, clean_logs=True)
+
+
 def test_running_vm_ensure_talon_running_skips_launch_when_running(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -514,48 +530,102 @@ def test_running_vm_prevent_idle_lock_writes_current_host_screensaver_defaults(
     ]
 
 
-def test_vm_controller_stop_falls_back_to_force_stop_for_stuck_vm(
+def test_vm_controller_stop_suspends_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vm_controller = VmController("talon-test", False)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[object, ...]] = []
 
     monkeypatch.setattr(
-        vm_module.lume,
+        vm_module.tart,
         "get_vm_info",
         lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
     )
     monkeypatch.setattr(
-        vm_module.lume,
-        "stop_vm",
-        lambda vm, debug=False: calls.append(("stop_vm", vm)),
+        vm_module.tart,
+        "suspend_vm",
+        lambda vm, debug=False: calls.append(("suspend_vm", vm)),
     )
-
-    def fake_wait_for_status(
-        vm: str, status: str, timeout: float, debug: bool = False
-    ) -> VmInfo:
-        del status, debug
-        calls.append(("wait_for_status", timeout))
-        if timeout == 60.0:
-            raise lume_module.LumeError(
-                "Timed out waiting for VM to reach status stopped: talonbox-talon-test"
-            )
-        return VmInfo(vm, "stopped", None)
-
-    monkeypatch.setattr(vm_module.lume, "wait_for_status", fake_wait_for_status)
     monkeypatch.setattr(
-        vm_module.lume,
-        "force_stop_vm",
-        lambda vm, debug=False: calls.append(("force_stop_vm", vm)),
+        vm_module.tart,
+        "wait_for_status",
+        lambda vm, status, timeout, debug=False: (
+            calls.append(("wait_for_status", status, timeout))
+            or VmInfo(vm, "suspended", None)
+        ),
     )
 
     vm_controller.stop()
 
     assert calls == [
-        ("stop_vm", "talonbox-talon-test"),
-        ("wait_for_status", 60.0),
-        ("force_stop_vm", "talonbox-talon-test"),
-        ("wait_for_status", 20.0),
+        ("suspend_vm", "talonbox-talon-test"),
+        ("wait_for_status", "suspended", 60.0),
+    ]
+
+
+def test_vm_controller_stop_can_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("talon-test", False)
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        vm_module.tart,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "running", "192.168.64.10"),
+    )
+    monkeypatch.setattr(
+        vm_module.tart,
+        "shutdown_vm",
+        lambda vm, debug=False: calls.append(("shutdown_vm", vm)),
+    )
+    monkeypatch.setattr(
+        vm_module.tart,
+        "wait_for_status",
+        lambda vm, status, timeout, debug=False: (
+            calls.append(("wait_for_status", status, timeout))
+            or VmInfo(vm, "stopped", None)
+        ),
+    )
+
+    vm_controller.stop(shutdown=True)
+
+    assert calls == [
+        ("shutdown_vm", "talonbox-talon-test"),
+        ("wait_for_status", "stopped", 60.0),
+    ]
+
+
+def test_vm_controller_stop_shutdown_attempts_suspended_vm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("talon-test", False)
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        vm_module.tart,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "suspended", None),
+    )
+    monkeypatch.setattr(
+        vm_module.tart,
+        "shutdown_vm",
+        lambda vm, debug=False: calls.append(("shutdown_vm", vm)),
+    )
+    monkeypatch.setattr(
+        vm_module.tart,
+        "wait_for_status",
+        lambda vm, status, timeout, debug=False: (
+            calls.append(("wait_for_status", status, timeout))
+            or VmInfo(vm, "stopped", None)
+        ),
+    )
+
+    vm_controller.stop(shutdown=True)
+
+    assert calls == [
+        ("shutdown_vm", "talonbox-talon-test"),
+        ("wait_for_status", "stopped", 60.0),
     ]
 
 
@@ -600,7 +670,7 @@ def test_running_vm_download_uses_scp(monkeypatch: pytest.MonkeyPatch) -> None:
         [
             "sshpass",
             "-p",
-            "lume",
+            "admin",
             "scp",
             "-o",
             "StrictHostKeyChecking=no",
@@ -620,7 +690,7 @@ def test_running_vm_download_uses_scp(monkeypatch: pytest.MonkeyPatch) -> None:
             "PreferredAuthentications=password",
             "-o",
             "PubkeyAuthentication=no",
-            "lume@192.168.64.10:/tmp/out.png",
+            "admin@192.168.64.10:/tmp/out.png",
             "/tmp/out.png",
         ]
     ]
@@ -641,7 +711,7 @@ def test_running_vm_run_repl_retries_transient_ssh_failure(
                 255,
                 "",
                 "ssh_askpass: exec(/usr/X11R6/bin/ssh-askpass): No such file or directory\n"
-                "lume@192.168.64.10: Permission denied (publickey,password,keyboard-interactive).",
+                "admin@192.168.64.10: Permission denied (publickey,password,keyboard-interactive).",
             )
         return subprocess.CompletedProcess([], 0, "ok\n", "")
 
@@ -700,7 +770,7 @@ def test_running_vm_download_retries_transient_ssh_failure(
                 255,
                 "",
                 "ssh_askpass: exec(/usr/X11R6/bin/ssh-askpass): No such file or directory\n"
-                "lume@192.168.64.10: Permission denied (publickey,password,keyboard-interactive).",
+                "admin@192.168.64.10: Permission denied (publickey,password,keyboard-interactive).",
             )
         return subprocess.CompletedProcess([], 0, "", "")
 

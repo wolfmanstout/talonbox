@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import click
 
-from .names import to_lume_vm_name
+from .names import to_tart_vm_name
 from .smoke_test import SmokeTestRunner
 from .talon_client import TalonClient
 from .transfer import TransferService
@@ -39,6 +39,7 @@ HELP_COMMAND_GROUPS = (
 
 DEFAULT_TALON_DMG_URL = "https://talonvoice.com/dl/latest/talon-mac.dmg"
 DEFAULT_BASE_VM_NAME = "tahoe-base"
+DEFAULT_BASE_IMAGE = "ghcr.io/cirruslabs/macos-tahoe-base:latest"
 APPLE_SPEECH_MANAGER_REFERENCE_URL = "https://developer.apple.com/library/archive/documentation/mac/pdf/Sound/Speech_Manager.pdf"
 
 
@@ -114,7 +115,9 @@ def _is_url(value: str) -> bool:
 def _render_create_markdown(name: str, talon_dmg: str, base: str) -> str:
     quoted_name = shlex.quote(name)
     quoted_base = shlex.quote(base)
-    quoted_lume_base = shlex.quote(to_lume_vm_name(base))
+    tart_base = to_tart_vm_name(base)
+    quoted_tart_base = shlex.quote(tart_base)
+    quoted_base_image = shlex.quote(DEFAULT_BASE_IMAGE)
     quoted_talon_dmg = shlex.quote(talon_dmg)
     talon_dmg_setup = (
         f"```bash\n"
@@ -132,85 +135,56 @@ This command prints setup instructions only. Creating a Talon-ready macOS VM req
 
 During setup and troubleshooting, prefer `--vnc` anywhere it is available in talonbox commands. VNC screenshots capture the VM framebuffer and are more likely to show macOS permission dialogs than Talon's own screenshot APIs. Agents may use `talonbox screenshot --vnc`, `talonbox click --vnc`, and `talonbox type --vnc` to inspect and respond to ordinary macOS permission dialogs after the user has authorized the action.
 
-## 1. Install Lume
+## 1. Install Tart
 
-Ensure `lume` is installed. Follow the Lume installation guide as needed:
+Ensure `tart` is installed. Follow the Tart quick start as needed:
 
-https://cua.ai/docs/lume/guide/getting-started/installation
+https://tart.run/quick-start/
 
 Verify the install:
 
 ```bash
-lume --version
+tart --version
 ```
 
-Lume's unattended setup flow also requires `sshpass`. Install it with Homebrew if needed:
+Install `sshpass` for talonbox's SSH, rsync, and scp transport:
 
 ```bash
-brew install sshpass
+brew install cirruslabs/cli/sshpass
 ```
 
-## 2. Create or reuse the macOS base VM
+## 2. Clone or reuse the macOS base VM
 
-Follow the Lume quickstart as needed:
+The base VM name is `{base}` in talonbox commands and `{tart_base}` in Tart commands. Pass the unprefixed name to `talonbox create --base`; talonbox's `talonbox-` prefix is applied automatically when rendering Tart commands.
 
-https://cua.ai/docs/lume/guide/getting-started/quickstart
-
-A 100 GB disk is recommended so the VM has enough room for macOS upgrades.
-
-The base VM name is `{base}` in talonbox commands and `{to_lume_vm_name(base)}` in Lume commands. Pass the unprefixed name to `talonbox create --base`; talonbox's `talonbox-` prefix is applied automatically when rendering Lume commands.
-
-First check whether the base VM already exists:
+First check whether the talonbox base VM already exists:
 
 ```bash
-lume get {quoted_lume_base}
+tart list
 ```
 
 If it already exists, reuse it. Do not create, overwrite, or delete an existing base VM during setup unless requested by the user. If the existing base VM is already verified, skip to cloning below. If you are not sure whether it is complete, skip creation and continue at the verification steps below.
 
-If the base VM does not exist, create it:
+If the base VM does not exist, clone it from Cirrus Labs' Tahoe base image:
 
 ```bash
-lume create {quoted_lume_base} --os macos --ipsw latest --disk-size 100GB
+tart clone {quoted_base_image} {quoted_tart_base}
 ```
 
-This can take a long time to download, depending on the user's internet connection.
+This can take a long time to download, depending on the user's internet connection. Do not resize the clone; resizing Tart clones is complicated, and the default disk size is the supported talonbox setup path.
 
-If VM creation succeeds but a later setup step fails, avoid downloading the IPSW again when possible. Re-run `lume create` with the cached IPSW path from Lume's output or temp directory in place of `latest`.
-
-## 3. Run macOS setup
-
-For a newly created base VM, run Lume's maintained setup preset as a separate step. `--no-display` keeps host mouse input from interfering with the automation, and `--debug` leaves screenshots and OCR output behind if the preset fails.
+## 3. Verify the base VM
 
 ```bash
-lume setup {quoted_lume_base} --unattended tahoe --debug --no-display
+talonbox start --no-talon {quoted_base}
+talonbox exec {quoted_base} -- whoami
 ```
 
-If setup fails, have the agent inspect the debug directory named in Lume's output. The most useful files are usually the `FAILED` screenshot and its `-ocr.json` companion.
-
-To understand what the maintained preset was trying to do, have the agent inspect the installed Lume setup docs and preset:
-
-```bash
-lume get {quoted_lume_base}
-lume setup --help
-lume dump-docs
-```
-
-`lume setup --help` shows the built-in preset names, but may not print the preset file path. If the agent needs the YAML itself, search near the installed `lume` binary and common package locations:
-
-```bash
-LUME_BIN="$(command -v lume)"
-find "$(dirname "$(realpath "$LUME_BIN")")/.." /Applications /opt/homebrew /usr/local -path '*/unattended-presets/tahoe.yml' -print 2>/dev/null
-```
-
-The Lume VM user is `lume`, and the default Lume password is `lume`.
-
-Do not patch or edit Lume's unattended setup YAML during talonbox setup. If the maintained preset is stale for the current macOS Setup Assistant, use the YAML contents only to determine which setup steps remain. In particular, look for similar labels such as "Set Up Later", "Other Sign-In Options", or "Skip" when Apple Account setup appears. You may use `talonbox screenshot --vnc`, `talonbox click --vnc`, and `talonbox type --vnc` to complete Setup Assistant.
+The expected output is `admin`. Tart's Cirrus Labs macOS images use `admin` with password `admin`.
 
 Ask for the user's help before going in circles trying to resolve issues. When asking the user to do something over VNC, look up the VNC URL first, then give the user the actual `vnc://...` URL and the simple talonbox command that opens the viewer. For base setup recovery:
 
 ```bash
-lume run {quoted_lume_base}
 talonbox status {quoted_base}
 ```
 
@@ -221,46 +195,21 @@ VNC URL: vnc://...
 Open it with: talonbox open {quoted_base}
 ```
 
-Useful user-facing checklist for manual Setup Assistant recovery:
+Restart the base VM once and confirm it returns to a logged-in desktop before cloning it.
 
-- Choose English and United States.
-- Set up as a new Mac.
-- Create the local user `lume` with password `lume`.
-- Skip Apple Account sign-in.
-- Accept the macOS terms.
-- Decline optional setup such as Location Services, Screen Time, Analytics, Siri, and FileVault.
-- Reach the desktop and enable Remote Login for the `lume` user in System Settings > General > Sharing.
+## 4. Clone and start `{name}`
 
-## 4. Finalize and verify the base VM
-
-After SSH is available, prefer talonbox commands for the base VM. `talonbox start --no-talon` is useful if the base VM is stopped: it starts the VM in the background, waits for SSH, and applies talonbox's no-lock settings, but it does not launch Talon or wait for Talon's REPL. Prefer `talonbox stop` over `lume stop`, because talonbox can fall back to cleaning up the Lume run process if the graceful stop path fails.
-
-The agent may apply any SSH-only `post_ssh_commands` from the installed Lume preset that did not run because setup was completed manually. Those commands commonly configure auto-login, `/etc/kcpassword`, screen saver and sleep settings, and auto-logout. Read them from the installed `tahoe.yml` before running them. This SSH configuration work can be handled by the agent; GUI Setup Assistant decisions should stay with the user over VNC.
-
-Before cloning the base VM, verify it behaves like a completed unattended setup:
+After the base VM is complete, shut it down and create the Talon VM from it. Use `talonbox clone`, not `tart clone`, so talonbox can apply its normal naming.
 
 ```bash
-talonbox status {quoted_base}
-talonbox exec {quoted_base} -- whoami
-talonbox exec {quoted_base} -- sysadminctl -autologin status
-talonbox exec {quoted_base} -- test -f /etc/kcpassword
-```
-
-Then restart the base VM once and confirm it returns to a logged-in desktop.
-
-## 5. Clone and start `{name}`
-
-After the base VM is complete, stop it and create the Talon VM from it. Use `talonbox clone`, not `lume clone`, so talonbox can apply its normal naming and clone warm-up behavior.
-
-```bash
-talonbox stop {quoted_base}
+talonbox stop --shutdown {quoted_base}
 talonbox clone {quoted_base} {quoted_name}
 talonbox start --no-talon {quoted_name}
 ```
 
 `--no-talon` starts the VM and waits for SSH without trying to launch Talon or wait for Talon's REPL. Use it while creating or repairing a VM before Talon is fully installed and accepted.
 
-## 6. Install Talon
+## 5. Install Talon
 
 Use `talonbox exec` for guest commands and `talonbox scp` for file copies.
 
@@ -299,7 +248,7 @@ The human user must review and accept the Talon EULA in the GUI manually. Agents
 
 The user should also choose a speech model through the Talon menu. A microphone does not need to be configured. This is also the time for the user to install any other apps they expect to test Talon with.
 
-## 7. Run the setup smoke test and grant permissions
+## 6. Run the setup smoke test and grant permissions
 
 Before the final restart, run the smoke test directly against this setup VM. This intentionally avoids a clone so the test can trigger any remaining Talon or macOS permission prompts in the VM you are preparing.
 
@@ -343,17 +292,17 @@ After the in-place smoke test passes, take one more VNC screenshot before the re
 talonbox screenshot --vnc {quoted_name} /tmp/before-reboot-vnc.png
 ```
 
-## 8. Reboot and stop the VM
+## 7. Reboot and stop the VM
 
 When the setup smoke test passes, the agent should ask the user to quit all apps and restart the VM from the macOS GUI. The user should uncheck the box to reopen windows after logging back in.
 
-After the user reports that the VM has restarted and returned to the desktop, the agent should stop it:
+After the user reports that the VM has restarted and returned to the desktop, the agent should shut it down so it is a clean clone source:
 
 ```bash
-talonbox stop {quoted_name}
+talonbox stop --shutdown {quoted_name}
 ```
 
-## 9. Smoke test the finished VM
+## 8. Smoke test the finished VM
 
 Confirm the stopped golden VM through a temporary clone:
 
@@ -381,7 +330,7 @@ talonbox smoke-test {quoted_name}
     epilog=_examples_epilog(
         "talonbox clone golden experiment",
         "talonbox start experiment",
-        "talonbox rsync -a ~/.talon/user/ experiment:/Users/lume/.talon/user/",
+        "talonbox rsync -a ~/.talon/user/ experiment:/Users/admin/.talon/user/",
         "talonbox exec experiment -- whoami",
         "talonbox mimic experiment 'focus chrome'",
         "talonbox click experiment 400 300",
@@ -425,7 +374,7 @@ def cli(click_ctx: click.Context, debug: bool) -> None:
     default=DEFAULT_BASE_VM_NAME,
     show_default=True,
     help=(
-        "Unprefixed talonbox base VM name to create or reuse. Lume commands use "
+        "Unprefixed talonbox base VM name to create or reuse. Tart commands use "
         "the corresponding talonbox-prefixed VM name."
     ),
 )
@@ -450,8 +399,8 @@ def create(base: str, talon_dmg: str | None, name: str) -> None:
     short_help="Clone one VM to another.",
     help=(
         "Clone SOURCE to DEST.\n\n"
-        "talonbox delegates to `lume clone`, which uses APFS copy-on-write cloning on "
-        "macOS for low-overhead VM copies. The source VM must be stopped, and the "
+        "talonbox delegates to `tart clone`, which uses APFS copy-on-write cloning on "
+        "macOS for low-overhead VM copies. The source VM must be shut down, and the "
         "destination VM must not already exist."
     ),
     epilog=_examples_epilog("talonbox clone golden experiment"),
@@ -526,8 +475,8 @@ def status(settings: CliSettings, name: str) -> None:
     short_help="Open the VM's VNC session.",
     help=(
         "Open the VM's VNC session in the macOS Screen Sharing app.\n\n"
-        "The VM must be running and Lume must report a VNC URL. This is useful when "
-        "Talon or macOS is waiting on GUI prompts, permissions, or first-run setup."
+        "The VM must be running with a VNC URL from `talonbox start`. This is useful "
+        "when Talon or macOS is waiting on GUI prompts, permissions, or first-run setup."
     ),
     epilog=_examples_epilog("talonbox open experiment"),
 )
@@ -537,7 +486,9 @@ def open_command(settings: CliSettings, name: str) -> None:
     vm_controller = VmController(name, settings.debug)
     info = vm_controller.get_vm()
     if info.status != "running" or not info.vnc_url:
-        raise click.ClickException(f"VM has no openable VNC URL: {name}")
+        raise click.ClickException(
+            f"VM has no openable VNC URL: {name}. Start it with `talonbox start {name}`."
+        )
     click.echo(info.vnc_url)
     result = subprocess.run(["open", info.vnc_url], check=False)
     if result.returncode:
@@ -592,13 +543,23 @@ def restart_talon(settings: CliSettings, name: str) -> None:
 
 @cli.command(
     short_help="Stop the VM if it is running.",
-    help="Stop the VM if it is running. Safe to run repeatedly.",
-    epilog=_examples_epilog("talonbox stop experiment"),
+    help=(
+        "Suspend the VM if it is running. Safe to run repeatedly.\n\n"
+        "Use `--shutdown` to shut down the guest instead of suspending it."
+    ),
+    epilog=_examples_epilog(
+        "talonbox stop experiment", "talonbox stop --shutdown experiment"
+    ),
+)
+@click.option(
+    "--shutdown",
+    is_flag=True,
+    help="Shut down the VM instead of suspending it.",
 )
 @click.argument("name", metavar="NAME")
 @pass_settings
-def stop(settings: CliSettings, name: str) -> None:
-    VmController(name, settings.debug).stop()
+def stop(settings: CliSettings, shutdown: bool, name: str) -> None:
+    VmController(name, settings.debug).stop(shutdown=shutdown)
 
 
 @cli.command(
@@ -606,7 +567,7 @@ def stop(settings: CliSettings, name: str) -> None:
     short_help="Run a Talon VM diagnostic.",
     help=(
         "Run a mutating end-to-end sanity check against a temporary clone of SOURCE.\n\n"
-        "The source VM must be stopped. smoke-test clones it, starts the clone, uploads a "
+        "The source VM must be shut down. smoke-test clones it, starts the clone, uploads a "
         "temporary Talon command bundle, runs mimic(), verifies a guest-side marker file, "
         "captures screenshots, and then stops and deletes the clone.\n\n"
         "Use `--in-place` only while creating or repairing a VM. It runs the same "
@@ -679,8 +640,8 @@ def exec_command(settings: CliSettings, name: str, command: tuple[str, ...]) -> 
         "that boundary fail with an obvious permission error."
     ),
     epilog=_examples_epilog(
-        "talonbox rsync -a ./repo/ experiment:/Users/lume/.talon/user/repo/",
-        "talonbox rsync -a experiment:/Users/lume/Pictures/ /tmp/guest-pictures/",
+        "talonbox rsync -a ./repo/ experiment:/Users/admin/.talon/user/repo/",
+        "talonbox rsync -a experiment:/Users/admin/Pictures/ /tmp/guest-pictures/",
     ),
 )
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
@@ -706,7 +667,7 @@ def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
         "that boundary fail with an obvious permission error."
     ),
     epilog=_examples_epilog(
-        "talonbox scp -q ./settings.talon experiment:/Users/lume/.talon/user/settings.talon",
+        "talonbox scp -q ./settings.talon experiment:/Users/admin/.talon/user/settings.talon",
         "talonbox scp -q experiment:/tmp/out.png /tmp/out.png",
     ),
 )

@@ -11,18 +11,16 @@ touching the host machine.
 
 ## Installation
 
-Install [Lume](https://github.com/trycua/cua/tree/main/libs/lume) first. See
-the [Lume installation docs](https://docs.trycua.com/docs/lume/installation),
-or use Homebrew:
+Install [Tart](https://tart.run/) first. See the
+[Tart quick start](https://tart.run/quick-start/), or use Homebrew:
 
 ```bash
-brew install lume
+brew install cirruslabs/cli/tart
+brew install cirruslabs/cli/sshpass
 ```
 
-`talonbox` uses Lume to create, clone, start, stop, and inspect macOS VMs. You
-can also use `lume` directly when you need its lower-level VM management CLI.
-[OpenClaw recommends Lume](https://docs.openclaw.ai/install/macos-vm#macos-vm-options)
-for sandboxed macOS VMs on Apple Silicon Macs.
+`talonbox` uses Tart to clone, start, suspend, stop, and inspect macOS VMs. You
+can also use `tart` directly when you need its lower-level VM management CLI.
 
 Install with [uv](https://docs.astral.sh/uv/):
 
@@ -64,7 +62,7 @@ Add `--talon-dmg ~/Downloads/talon-beta.dmg` to the `talonbox create` command.
 `talonbox create` prints setup instructions for a human or agent to follow.
 The `--base` option names a reusable base OS VM before Talon is set up.
 Expect the first golden VM setup to be time-consuming and somewhat
-error-prone: macOS setup screens, Lume automation, Talon first-run prompts, and
+error-prone: macOS setup screens, Talon first-run prompts, and
 privacy permissions all need to line up. That setup friction is worth getting
 through, and it is not representative of the normal talonbox experience. Once a
 golden VM passes `smoke-test`, talonbox should feel fast and magical.
@@ -86,8 +84,8 @@ you reach a macOS or Talon GUI prompt, give me the VNC URL and
 `talonbox open NAME`, then wait for me instead of navigating it yourself.
 ```
 
-The Lume VM user is `lume`, and the default Lume password is `lume`. The VM
-should auto-login, but you may occasionally need these for permissions dialogs.
+The Tart VM user is `admin`, and the default Tart image password is `admin`.
+The VM should auto-login, but you may occasionally need these for permissions dialogs.
 
 ## Usage
 
@@ -102,7 +100,7 @@ You can also run `talonbox` commands manually if you'd like:
 ```bash
 talonbox clone golden experiment
 talonbox start experiment
-talonbox rsync -a ~/.talon/user/ experiment:/Users/lume/.talon/user/
+talonbox rsync -a ~/.talon/user/ experiment:/Users/admin/.talon/user/
 talonbox mimic experiment "focus chrome"
 talonbox click experiment 400 300
 talonbox type experiment "hello from Talon"
@@ -120,23 +118,26 @@ For a first-pass diagnostic when the setup seems broken, run:
 talonbox smoke-test golden
 ```
 
-`smoke-test` checks a stopped source VM through a temporary clone.
+`smoke-test` checks a source VM through a temporary clone. Tart clones should
+come from a fully stopped VM, so run `talonbox stop --shutdown golden` before
+cloning or smoke testing if the source is suspended or running.
 
 ## Agent Instructions
 
 `talonbox` works with different cloning, stopping, and deletion workflows. Add
 the policy you prefer to your project's `AGENTS.md` file or to a reusable agent
 skill. macOS Virtualization commonly allows only two active VMs, so keep source
-VMs stopped and stop test VMs when each test is complete.
+VMs inactive and stop test VMs when each test is complete.
 
 Drop-in guidance for a simple single-test-VM workflow:
 
 ```markdown
 Use `talonbox` for Talon tests. Read `talonbox --help` before choosing
-commands. Keep `golden` stopped and clean. Use one working VM named `test` for
+commands. Keep `golden` inactive and clean. Use one working VM named `test` for
 experiments. Before testing, run `talonbox list` or `talonbox status test`; if
-`test` does not exist, clone it from `golden`. Sync the current repo into the
-VM, run the relevant `mimic` commands, capture screenshots or logs under
+`test` does not exist, make sure `golden` is fully stopped with
+`talonbox stop --shutdown golden`, then clone it. Sync the current repo into
+the VM, run the relevant `mimic` commands, capture screenshots or logs under
 `/tmp`, then stop `test` when done. Ask before deleting `test` unless the user
 explicitly requested a clean VM.
 ```
@@ -149,9 +150,11 @@ before choosing commands. Prefer `talonbox clone golden <task-name>` before
 each test or experiment, using a readable name such as
 `test-cursorless-snippets` or `debug-dictation-timeout`. Start that VM, sync
 the repo into it, run the relevant `mimic` commands, capture screenshots or
-logs under `/tmp`, then stop the VM when done. Keep `golden` stopped and clean.
-Stop completed test VMs before starting more. Do not delete the task VM until
-the user has approved the result; after approval and commit, delete it.
+logs under `/tmp`, then stop the VM when done. Keep `golden` inactive and
+clean; run `talonbox stop --shutdown golden` before cloning it if needed. Stop
+completed test VMs before starting more. Do not shut down with `--shutdown` or
+delete the task VM until the user has approved the result; after approval and
+commit, delete it.
 ```
 
 ## Security Principles

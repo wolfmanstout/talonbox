@@ -14,13 +14,13 @@ def test_transfer_service_rsync_rewrites_vm_destination() -> None:
     _, transfer_service, _ = build_service_stack()
 
     args = transfer_service.prepare_rsync_args(
-        ["-av", "./repo/", "talon-test:/Users/lume/.talon/user/repo/"]
+        ["-av", "./repo/", "talon-test:/Users/admin/.talon/user/repo/"]
     )
 
     assert args == [
         "-av",
         "./repo/",
-        "lume@192.168.64.10:/Users/lume/.talon/user/repo/",
+        "admin@192.168.64.10:/Users/admin/.talon/user/repo/",
     ]
 
 
@@ -32,7 +32,7 @@ def test_transfer_service_scp_download_rewrites_vm_source() -> None:
     )
 
     assert args == [
-        "lume@192.168.64.10:/tmp/out.png",
+        "admin@192.168.64.10:/tmp/out.png",
         str(Path("/tmp/out.png").resolve(strict=False)),
     ]
 
@@ -79,7 +79,7 @@ def test_transfer_service_allows_rsync_host_write_flag_inside_sandbox() -> None:
     assert args == [
         "--log-file=/tmp/talonbox-rsync.log",
         "./repo/",
-        "lume@192.168.64.10:/tmp/repo/",
+        "admin@192.168.64.10:/tmp/repo/",
     ]
 
 
@@ -95,7 +95,7 @@ def test_transfer_service_rejects_local_to_local() -> None:
 
     with pytest.raises(click.ClickException, match="Transfer requires one VM operand"):
         transfer_service.prepare_rsync_args(
-            ["-av", "./repo/", "/Users/lume/.talon/user/repo/"]
+            ["-av", "./repo/", "/Users/admin/.talon/user/repo/"]
         )
 
 
@@ -147,10 +147,10 @@ def test_transfer_service_rsync_uses_fixed_vm_shell(
             "(profile)",
             "rsync",
             "-e",
-            "sshpass -p lume ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=no -o NumberOfPasswordPrompts=1 -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no -o PreferredAuthentications=password -o PubkeyAuthentication=no",
+            "sshpass -p admin ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=no -o NumberOfPasswordPrompts=1 -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no -o PreferredAuthentications=password -o PubkeyAuthentication=no",
             "-av",
             "src/",
-            "lume@192.168.64.10:/tmp/dest",
+            "admin@192.168.64.10:/tmp/dest",
         ]
     ]
 
@@ -186,7 +186,7 @@ def test_transfer_service_scp_uses_fixed_vm_ssh_options(
             "(profile)",
             "sshpass",
             "-p",
-            "lume",
+            "admin",
             "scp",
             "-o",
             "StrictHostKeyChecking=no",
@@ -207,7 +207,7 @@ def test_transfer_service_scp_uses_fixed_vm_ssh_options(
             "-o",
             "PubkeyAuthentication=no",
             "./settings.talon",
-            "lume@192.168.64.10:/tmp/settings.talon",
+            "admin@192.168.64.10:/tmp/settings.talon",
         ]
     ]
 

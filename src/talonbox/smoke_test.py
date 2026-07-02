@@ -9,10 +9,10 @@ from typing import Protocol
 
 import click
 
-from . import lume
+from . import tart
 from .talon_client import TalonClient
 from .transfer import HOST_OUTPUT_ROOT, TransferService
-from .vm import RunningVm, VmController
+from .vm import RemoteCommandError, RunningVm, TransportError, VmController
 
 MARKER_MIMIC_ATTEMPTS = 10
 MARKER_MIMIC_RETRY_DELAY_SECONDS = 1.0
@@ -89,10 +89,11 @@ class SmokeTestRunner:
                 self.vm_controller.get_vm,
                 success_message="VM status checked.",
             )
-            assert isinstance(info, lume.VmInfo)
+            assert isinstance(info, tart.VmInfo)
             if clone and info.status != "stopped":
                 raise click.ClickException(
-                    f"Source VM must be stopped before smoke-test: {self.vm_controller.vm} ({info.status})"
+                    f"Source VM must be stopped before smoke-test: {self.vm_controller.vm} ({info.status}). "
+                    f"Run `talonbox stop --shutdown {self.vm_controller.vm}` first."
                 )
 
             if clone:
@@ -161,6 +162,11 @@ class SmokeTestRunner:
                     vnc=True,
                 ),
                 success_message="VNC desktop probe PNG captured.",
+            )
+            self.run_step(
+                "Close the desktop capture probe",
+                lambda: self.close_desktop_capture_probe(running_vm),
+                success_message="Desktop capture probe closed.",
             )
             self.run_step(
                 "Verify Talon can capture the complete desktop",
@@ -324,7 +330,7 @@ class SmokeTestRunner:
             [
                 "-a",
                 f"{bundle_dir}/",
-                f"{transfer_service.running_vm.name}:/Users/lume/.talon/user/talonbox_smoke_test/",
+                f"{transfer_service.running_vm.name}:/Users/admin/.talon/user/talonbox_smoke_test/",
             ]
         )
         if returncode:
@@ -377,8 +383,44 @@ class SmokeTestRunner:
             if last_error is not None
             else f"Smoke test marker was not created: {marker_path}"
         )
+        diagnosis = self.diagnose_mimic_failure(running_vm, marker_path, token)
         raise click.ClickException(
             f"Smoke test marker was not verified after {attempts} mimic attempts: {message}"
+            f"{diagnosis}"
+        )
+
+    def diagnose_mimic_failure(
+        self, running_vm: RunningVm, marker_path: str, token: str
+    ) -> str:
+        code = "\n".join(
+            [
+                "from pathlib import Path",
+                "from talon import actions",
+                f"path = Path({marker_path!r})",
+                "path.unlink(missing_ok=True)",
+                "actions.user.talonbox_smoke_test()",
+                f"print('talonbox_direct_action_ok=' + str(path.exists() and path.read_text(encoding='utf-8') == {token!r}))",
+                "",
+            ]
+        )
+        try:
+            result = running_vm.run_repl(f"exec({code!r})\n")
+        except (RemoteCommandError, TransportError):
+            return (
+                " The smoke-test command bundle could not be checked directly. "
+                "Inspect Talon logs and confirm a speech model is installed and selected."
+            )
+        if result.returncode == 0 and "talonbox_direct_action_ok=True" in (
+            result.stdout or ""
+        ):
+            return (
+                " The smoke-test action is loaded and works when called directly, "
+                "but Talon's mimic() did not dispatch it. Confirm Speech Recognition "
+                "has an installed, selected model in the Talon menu, then rerun smoke-test."
+            )
+        return (
+            " Confirm Talon loaded the smoke-test command bundle, and confirm Speech "
+            "Recognition has an installed, selected model in the Talon menu."
         )
 
     def validate_screenshot(self, path: Path) -> None:
@@ -404,6 +446,11 @@ class SmokeTestRunner:
             ">/tmp/talonbox-desktop-capture-probe.log 2>&1 &"
         )
         time.sleep(DESKTOP_PROBE_SETTLE_SECONDS)
+
+    def close_desktop_capture_probe(self, running_vm: RunningVm) -> None:
+        running_vm.run_shell(
+            "pkill -f 'talonbox desktop capture [p]robe' >/dev/null 2>&1 || true"
+        )
 
     def trigger_visual_change(self, talon_client: TalonClient) -> None:
         talon_client.repl(
