@@ -337,6 +337,7 @@ def test_mimic_command_delegates_to_talon_client(
     result = runner.invoke(cli, ["mimic", "experiment", "focus chrome"])
 
     assert result.exit_code == 0
+    assert result.output == "Mimic successful\n"
     assert calls == [("mimic", "focus chrome", False)]
 
 
@@ -359,6 +360,7 @@ def test_mimic_command_can_use_audio_mode(
     )
 
     assert result.exit_code == 0
+    assert result.output == "Mimic successful\n"
     assert calls == [("mimic", "talonbox [[slnc 500]] smoke test", True)]
 
 
@@ -501,6 +503,7 @@ def test_clone_command_delegates_to_vm_controller(
     result = runner.invoke(cli, ["clone", "golden", "experiment"])
 
     assert result.exit_code == 0
+    assert result.output == "Clone successful\n"
     assert calls == [("golden", "experiment")]
 
 
@@ -519,7 +522,27 @@ def test_rename_command_delegates_to_vm_controller(
     result = runner.invoke(cli, ["rename", "experiment", "experiment-old"])
 
     assert result.exit_code == 0
+    assert result.output == "Rename successful\n"
     assert calls == [("experiment", "experiment-old")]
+
+
+def test_delete_command_delegates_to_vm_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "delete",
+        lambda self: calls.append(self.vm),
+    )
+
+    result = runner.invoke(cli, ["delete", "experiment"])
+
+    assert result.exit_code == 0
+    assert result.output == "Delete successful\n"
+    assert calls == ["experiment"]
 
 
 def test_status_command_delegates_to_vm_controller(
@@ -571,6 +594,45 @@ def test_open_command_opens_vnc_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == [["open", "vnc://127.0.0.1:5901"]]
 
 
+def test_restart_talon_command_delegates_to_vm_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, bool, bool]] = []
+
+    def fake_restart_talon(
+        self: VmController, *, wipe_user_dir: bool, clean_logs: bool
+    ) -> None:
+        calls.append((self.vm, wipe_user_dir, clean_logs))
+
+    monkeypatch.setattr(cli_module.VmController, "restart_talon", fake_restart_talon)
+
+    result = runner.invoke(cli, ["restart-talon", "experiment"])
+
+    assert result.exit_code == 0
+    assert result.output == "Restart Talon successful\n"
+    assert calls == [("experiment", False, True)]
+
+
+def test_stop_command_delegates_to_vm_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, bool]] = []
+
+    monkeypatch.setattr(
+        cli_module.VmController,
+        "stop",
+        lambda self, *, shutdown=False: calls.append((self.vm, shutdown)),
+    )
+
+    result = runner.invoke(cli, ["stop", "--shutdown", "experiment"])
+
+    assert result.exit_code == 0
+    assert result.output == "Stop successful\n"
+    assert calls == [("experiment", True)]
+
+
 def test_screenshot_command_uses_talon_capture_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -588,6 +650,7 @@ def test_screenshot_command_uses_talon_capture_by_default(
     result = runner.invoke(cli, ["screenshot", "experiment", "/tmp/screen.png"])
 
     assert result.exit_code == 0
+    assert result.output == "Screenshot successful\n"
     assert calls == [("capture_screenshot", "/tmp/screen.png", False)]
 
 
@@ -610,6 +673,7 @@ def test_screenshot_command_can_use_vnc(
     )
 
     assert result.exit_code == 0
+    assert result.output == "Screenshot successful\n"
     assert calls == [("capture_screenshot", "/tmp/screen.png", True)]
 
 
@@ -632,6 +696,7 @@ def test_click_command_uses_talon_by_default(
     result = runner.invoke(cli, ["click", "experiment", "400", "300"])
 
     assert result.exit_code == 0
+    assert result.output == "Click successful\n"
     assert calls == [("click", 400, 300, "left", False)]
 
 
@@ -656,6 +721,7 @@ def test_click_command_can_use_vnc_and_button(
     )
 
     assert result.exit_code == 0
+    assert result.output == "Click successful\n"
     assert calls == [("click", 400, 300, "right", True)]
 
 
@@ -676,6 +742,7 @@ def test_type_command_uses_talon_by_default(
     result = runner.invoke(cli, ["type", "experiment", "hello"])
 
     assert result.exit_code == 0
+    assert result.output == "Type successful\n"
     assert calls == [("type_text", "hello", False)]
 
 
@@ -696,6 +763,7 @@ def test_type_command_can_use_vnc(
     result = runner.invoke(cli, ["type", "--vnc", "experiment", "hello"])
 
     assert result.exit_code == 0
+    assert result.output == "Type successful\n"
     assert calls == [("type_text", "hello", True)]
 
 
@@ -718,6 +786,7 @@ def test_type_command_can_send_vnc_control_text(
     result = runner.invoke(cli, ["type", "--vnc", "experiment", text])
 
     assert result.exit_code == 0
+    assert result.output == "Type successful\n"
     assert calls == [("type_text", text, True)]
 
 
@@ -740,6 +809,7 @@ def test_press_command_can_use_vnc(
     result = runner.invoke(cli, ["press", "--vnc", "experiment", key])
 
     assert result.exit_code == 0
+    assert result.output == "Press successful\n"
     assert calls == [("press_key", key, True)]
 
 
@@ -846,6 +916,7 @@ def test_repl_reads_stdin_when_no_code(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(cli, ["repl", "experiment"], input="print(1)\n")
 
     assert result.exit_code == 0
+    assert result.output == "Repl successful\n"
     assert payloads == [("repl", "print(1)\n")]
 
 
@@ -863,6 +934,36 @@ def test_repl_help_prefers_quoted_code_examples() -> None:
         "      print(ui.active_app())'" in result.output
     )
     assert "printf 'print(1+1)\\n' | talonbox repl experiment" not in result.output
+
+
+def test_exec_command_reports_success_for_quiet_guest_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    running_vm = running_vm_fixture()
+    calls: list[tuple[str, str | list[str]]] = []
+
+    monkeypatch.setattr(
+        cli_module.VmController, "get_running_vm", lambda self: running_vm
+    )
+
+    def fake_exec(
+        command_args: str | list[str],
+        stream: bool = False,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((running_vm.ip_address, command_args))
+        assert stream is True
+        assert check is False
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(running_vm, "run_shell", fake_exec)
+
+    result = runner.invoke(cli, ["exec", "experiment", "--", "true"])
+
+    assert result.exit_code == 0
+    assert result.output == "Exec successful\n"
+    assert calls == [("192.168.64.10", "true")]
 
 
 def test_exec_command_runs_guest_shell_and_propagates_exit_code(
@@ -892,3 +993,91 @@ def test_exec_command_runs_guest_shell_and_propagates_exit_code(
 
     assert result.exit_code == 7
     assert calls == [("192.168.64.10", ["echo", "hi"])]
+
+
+def test_rsync_command_reports_success_for_quiet_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    running_vm = running_vm_fixture()
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    monkeypatch.setattr(
+        cli_module.TransferService,
+        "extract_rsync_vm_name",
+        lambda args: "experiment",
+    )
+    monkeypatch.setattr(
+        cli_module.VmController, "get_running_vm", lambda self: running_vm
+    )
+
+    def fake_rsync(self: object, args: tuple[str, ...]) -> int:
+        calls.append((running_vm.ip_address, args))
+        return 0
+
+    monkeypatch.setattr(cli_module.TransferService, "rsync", fake_rsync)
+
+    result = runner.invoke(
+        cli,
+        [
+            "rsync",
+            "-a",
+            "./repo/",
+            "experiment:/Users/admin/.talon/user/repo/",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "Rsync successful\n"
+    assert calls == [
+        (
+            "192.168.64.10",
+            ("-a", "./repo/", "experiment:/Users/admin/.talon/user/repo/"),
+        )
+    ]
+
+
+def test_scp_command_reports_success_for_quiet_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = CliRunner()
+    running_vm = running_vm_fixture()
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    monkeypatch.setattr(
+        cli_module.TransferService,
+        "extract_scp_vm_name",
+        lambda args: "experiment",
+    )
+    monkeypatch.setattr(
+        cli_module.VmController, "get_running_vm", lambda self: running_vm
+    )
+
+    def fake_scp(self: object, args: tuple[str, ...]) -> int:
+        calls.append((running_vm.ip_address, args))
+        return 0
+
+    monkeypatch.setattr(cli_module.TransferService, "scp", fake_scp)
+
+    result = runner.invoke(
+        cli,
+        [
+            "scp",
+            "-q",
+            "./settings.talon",
+            "experiment:/Users/admin/.talon/user/settings.talon",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "Scp successful\n"
+    assert calls == [
+        (
+            "192.168.64.10",
+            (
+                "-q",
+                "./settings.talon",
+                "experiment:/Users/admin/.talon/user/settings.talon",
+            ),
+        )
+    ]

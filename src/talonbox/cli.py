@@ -98,6 +98,10 @@ def _echo_vm_info(vm_controller: VmController, info: object) -> None:
         click.echo(line)
 
 
+def _echo_success(command_name: str) -> None:
+    click.echo(f"{command_name} successful")
+
+
 def _build_talon_client(settings: CliSettings, vm: str) -> TalonClient:
     running_vm = VmController(vm, settings.debug).get_running_vm()
     transfer_service = TransferService(running_vm)
@@ -420,6 +424,7 @@ def create(base: str, talon_dmg: str | None, name: str) -> None:
 @pass_settings
 def clone(settings: CliSettings, source: str, dest: str) -> None:
     VmController(source, settings.debug).clone(dest)
+    _echo_success("Clone")
 
 
 @cli.command(
@@ -435,6 +440,7 @@ def clone(settings: CliSettings, source: str, dest: str) -> None:
 @pass_settings
 def rename(settings: CliSettings, source: str, dest: str) -> None:
     VmController(source, settings.debug).rename(dest)
+    _echo_success("Rename")
 
 
 @cli.command(
@@ -446,6 +452,7 @@ def rename(settings: CliSettings, source: str, dest: str) -> None:
 @pass_settings
 def delete(settings: CliSettings, name: str) -> None:
     VmController(name, settings.debug).delete()
+    _echo_success("Delete")
 
 
 @cli.command(name="list", short_help="List talonbox VMs.")
@@ -549,6 +556,7 @@ def restart_talon(settings: CliSettings, name: str) -> None:
         wipe_user_dir=False,
         clean_logs=True,
     )
+    _echo_success("Restart Talon")
 
 
 @cli.command(
@@ -570,6 +578,7 @@ def restart_talon(settings: CliSettings, name: str) -> None:
 @pass_settings
 def stop(settings: CliSettings, shutdown: bool, name: str) -> None:
     VmController(name, settings.debug).stop(shutdown=shutdown)
+    _echo_success("Stop")
 
 
 @cli.command(
@@ -635,6 +644,7 @@ def exec_command(settings: CliSettings, name: str, command: tuple[str, ...]) -> 
     )
     if result.returncode:
         raise click.exceptions.Exit(result.returncode)
+    _echo_success("Exec")
 
 
 @cli.command(
@@ -662,6 +672,7 @@ def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
     returncode = TransferService(running_vm).rsync(args)
     if returncode:
         raise click.exceptions.Exit(returncode)
+    _echo_success("Rsync")
 
 
 @cli.command(
@@ -689,6 +700,7 @@ def scp(settings: CliSettings, args: tuple[str, ...]) -> None:
     returncode = TransferService(running_vm).scp(args)
     if returncode:
         raise click.exceptions.Exit(returncode)
+    _echo_success("Scp")
 
 
 @cli.command(
@@ -716,6 +728,7 @@ def repl(settings: CliSettings, name: str, code: str | None) -> None:
         code = sys.stdin.read()
     assert code is not None
     _build_talon_client(settings, name).repl(code)
+    _echo_success("Repl")
 
 
 @cli.command(
@@ -748,6 +761,7 @@ def repl(settings: CliSettings, name: str, code: str | None) -> None:
 @pass_settings
 def mimic(settings: CliSettings, audio: bool, name: str, command: str) -> None:
     _build_talon_client(settings, name).mimic(command, audio=audio)
+    _echo_success("Mimic")
 
 
 @cli.command(
@@ -793,6 +807,7 @@ def click_command(
         button=button,
         vnc=vnc,
     )
+    _echo_success("Click")
 
 
 @cli.command(
@@ -819,6 +834,7 @@ def click_command(
 @pass_settings
 def type_command(settings: CliSettings, vnc: bool, name: str, text: str) -> None:
     _build_talon_client(settings, name).type_text(text, vnc=vnc)
+    _echo_success("Type")
 
 
 @cli.command(
@@ -850,6 +866,7 @@ def type_command(settings: CliSettings, vnc: bool, name: str, text: str) -> None
 @pass_settings
 def press_command(settings: CliSettings, vnc: bool, name: str, key: str) -> None:
     _build_talon_client(settings, name).press_key(key, vnc=vnc)
+    _echo_success("Press")
 
 
 @cli.command(
@@ -884,6 +901,7 @@ def screenshot(settings: CliSettings, vnc: bool, name: str, filepath: Path) -> N
         filepath,
         vnc=vnc,
     )
+    _echo_success("Screenshot")
 
 
 def main() -> int:
