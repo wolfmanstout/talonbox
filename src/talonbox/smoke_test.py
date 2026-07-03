@@ -24,6 +24,7 @@ DESKTOP_PROBE_SETTLE_SECONDS = 1.0
 DESKTOP_CAPTURE_MAX_MEAN_ABS_DIFF = 4.0
 DESKTOP_CAPTURE_MAX_MISMATCH_RATIO = 0.02
 DESKTOP_CAPTURE_MISMATCH_CHANNEL_THRESHOLD = 40
+GUEST_SMOKE_BUNDLE_PATH = "/Users/admin/.talon/user/talonbox_smoke_test"
 
 
 class MimicClient(Protocol):
@@ -221,6 +222,12 @@ class SmokeTestRunner:
                 lambda: self.verify_visual_marker_present(marker_ppm_path),
                 success_message="Talon visual marker appeared.",
             )
+            if not clone:
+                self.run_step(
+                    "Remove the temporary Talon smoke-test files",
+                    lambda: self.cleanup_guest_artifacts(running_vm, marker_path),
+                    success_message="Temporary Talon smoke-test files removed.",
+                )
         except click.ClickException as error:
             self._fail(str(error), screenshot_path=hint_screenshot())
         except click.exceptions.Exit:
@@ -330,11 +337,15 @@ class SmokeTestRunner:
             [
                 "-a",
                 f"{bundle_dir}/",
-                f"{transfer_service.running_vm.name}:/Users/admin/.talon/user/talonbox_smoke_test/",
+                f"{transfer_service.running_vm.name}:{GUEST_SMOKE_BUNDLE_PATH}/",
             ]
         )
         if returncode:
             raise click.ClickException(f"rsync failed with exit code {returncode}")
+
+    def cleanup_guest_artifacts(self, running_vm: RunningVm, marker_path: str) -> None:
+        running_vm.run_shell(["rm", "-rf", GUEST_SMOKE_BUNDLE_PATH])
+        running_vm.run_shell(["rm", "-f", marker_path])
 
     def verify_marker(
         self, running_vm: RunningVm, marker_path: str, token: str

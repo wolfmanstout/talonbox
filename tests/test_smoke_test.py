@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 import pytest
 
-from talonbox.smoke_test import SmokeTestRunner
+from talonbox.smoke_test import GUEST_SMOKE_BUNDLE_PATH, SmokeTestRunner
 from talonbox.tart import VmInfo
 from talonbox.transfer import TransferService
 from tests.helpers import build_service_stack, running_vm_fixture
@@ -120,9 +120,9 @@ def test_run_marker_mimic_until_verified_fails_after_bounded_retries(
     monkeypatch.setattr(
         runner,
         "diagnose_mimic_failure",
-        lambda running_vm_arg,
-        marker_path,
-        token: " Confirm a speech model is selected.",
+        lambda running_vm_arg, marker_path, token: (
+            " Confirm a speech model is selected."
+        ),
     )
     monkeypatch.setattr("talonbox.smoke_test.time.sleep", lambda delay: None)
 
@@ -310,6 +310,29 @@ def test_close_desktop_capture_probe_kills_only_smoke_probe(
     ]
 
 
+def test_cleanup_guest_artifacts_removes_uploaded_bundle_and_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller)
+    running_vm = running_vm_fixture()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        running_vm,
+        "run_shell",
+        lambda command: (
+            calls.append(command) or subprocess.CompletedProcess(command, 0, "", "")
+        ),
+    )
+
+    runner.cleanup_guest_artifacts(running_vm, "/tmp/talonbox-marker.txt")
+
+    assert calls == [
+        ["rm", "-rf", GUEST_SMOKE_BUNDLE_PATH],
+        ["rm", "-f", "/tmp/talonbox-marker.txt"],
+    ]
+
+
 def test_smoke_test_runner_rejects_running_source_without_mutating_it(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -491,7 +514,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
     assert (artifact_dir / "bundle" / "talonbox_smoke_test.talon").exists()
 
 
-def test_smoke_test_runner_can_run_in_place_without_cleanup(
+def test_smoke_test_runner_can_run_in_place_and_clean_up_guest_artifacts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -499,6 +522,7 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
     vm_controller, _, _ = build_service_stack()
     runner = SmokeTestRunner(vm_controller, host_output_root=tmp_path.resolve())
     steps: list[str] = []
+    shell_commands: list[list[str]] = []
     running_vm = running_vm_fixture()
     transfer_service = TransferService(running_vm)
 
@@ -531,6 +555,14 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         transfer_service,
         "rsync",
         lambda args: steps.append(f"rsync:{args[0]}") or 0,
+    )
+    monkeypatch.setattr(
+        running_vm,
+        "run_shell",
+        lambda command: (
+            shell_commands.append(command)
+            or subprocess.CompletedProcess(command, 0, "", "")
+        ),
     )
     monkeypatch.setattr(
         vm_controller,
@@ -620,6 +652,80 @@ def test_smoke_test_runner_can_run_in_place_without_cleanup(
         "capture:screenshot-after-visual-change.ppm",
         "verify_visual_marker",
     ]
+    assert shell_commands[0] == ["rm", "-rf", GUEST_SMOKE_BUNDLE_PATH]
+    assert shell_commands[1][0:2] == ["rm", "-f"]
+    assert shell_commands[1][2].startswith("/tmp/talonbox-smoke-test-marker-")
+
+
+def test_in_place_smoke_test_failure_leaves_guest_artifacts_for_debugging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    vm_controller, _, _ = build_service_stack()
+    runner = SmokeTestRunner(vm_controller, host_output_root=tmp_path.resolve())
+    steps: list[str] = []
+    shell_commands: list[list[str]] = []
+    running_vm = running_vm_fixture()
+    transfer_service = TransferService(running_vm)
+
+    monkeypatch.setattr(
+        vm_controller,
+        "get_vm",
+        lambda: VmInfo("talon-test", "running", "192.168.64.10"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "for_vm",
+        lambda name: pytest.fail("in-place smoke test should not create a temp VM"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "clone",
+        lambda dest: pytest.fail("in-place smoke test should not clone"),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "start",
+        lambda: steps.append("start") or running_vm,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_build_transfer_service",
+        lambda running_vm_arg: transfer_service,
+    )
+    monkeypatch.setattr(
+        transfer_service,
+        "rsync",
+        lambda args: steps.append(f"rsync:{args[0]}") or 0,
+    )
+    monkeypatch.setattr(
+        running_vm,
+        "run_shell",
+        lambda command: (
+            shell_commands.append(command)
+            or subprocess.CompletedProcess(command, 0, "", "")
+        ),
+    )
+    monkeypatch.setattr(
+        vm_controller,
+        "restart_talon",
+        lambda *, wipe_user_dir, clean_logs: (_ for _ in ()).throw(
+            click.ClickException("talon restart failed")
+        ),
+    )
+
+    with pytest.raises(click.exceptions.Exit) as error:
+        runner.run(clone=False)
+
+    captured = capsys.readouterr()
+    assert error.value.exit_code == 1
+    assert (
+        "FAIL Restart Talon to load the uploaded bundle: talon restart failed"
+        in captured.out
+    )
+    assert steps == ["start", "rsync:-a"]
+    assert shell_commands == []
 
 
 def test_smoke_test_runner_failure_after_start_still_stops_vm(
