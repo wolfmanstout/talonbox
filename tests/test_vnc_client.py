@@ -143,6 +143,40 @@ def test_vnc_client_type_matches_vncdotool_type_key_mapping(
     assert keys == ["a", "minus", "enter", "tab", "b"]
 
 
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [("enter", "enter"), ("return", "enter"), ("space", " ")],
+)
+def test_vnc_client_press_key_uses_vncdotool_key_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+    expected: str,
+) -> None:
+    _, transfer_service, talon_client = build_service_stack()
+    vnc_client = VncClient(talon_client.running_vm, transfer_service)
+    keys: list[str] = []
+    talon_client.running_vm.vnc_url = "vnc://127.0.0.1:63414"
+
+    class FakeVncConnection:
+        def __enter__(self) -> FakeVncConnection:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def keyPress(self, key: str) -> None:
+            keys.append(key)
+
+    monkeypatch.setattr(
+        "talonbox.vnc_client.vnc_api.connect",
+        lambda server, password=None, timeout=None: FakeVncConnection(),
+    )
+
+    vnc_client.press_key(key)
+
+    assert keys == [expected]
+
+
 def test_vnc_client_requires_vnc_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

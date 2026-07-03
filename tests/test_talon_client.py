@@ -287,6 +287,31 @@ def test_talon_client_type_uses_talon_insert(
     assert "actions.insert(\\'hello \"world\"\\\\n\\')" in payloads[0]
 
 
+def test_talon_client_press_key_uses_talon_key_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, talon_client = build_service_stack()
+    payloads: list[str] = []
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: None,
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: (
+            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
+        ),
+    )
+
+    talon_client.press_key("return")
+
+    assert "from talon import actions" in payloads[0]
+    assert "actions.key('enter')" in payloads[0]
+
+
 def test_talon_client_screenshot_uses_talon_capture_and_download(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -498,6 +523,21 @@ def test_talon_client_type_delegates_to_vnc_client() -> None:
     talon_client.type_text("hello", vnc=True)
 
     assert calls == ["hello"]
+
+
+def test_talon_client_press_key_delegates_to_vnc_client() -> None:
+    _, _, talon_client = build_service_stack()
+    calls: list[str] = []
+
+    class FakeVncClient:
+        def press_key(self, key: str) -> None:
+            calls.append(key)
+
+    talon_client.vnc_client = cast(Any, FakeVncClient())
+
+    talon_client.press_key("enter", vnc=True)
+
+    assert calls == ["enter"]
 
 
 def test_talon_client_screenshot_rejects_output_outside_tmp() -> None:

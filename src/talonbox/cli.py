@@ -246,7 +246,17 @@ When handing this step to the user, run `talonbox status {name}` yourself, then 
 
 The human user must review and accept the Talon EULA in the GUI manually. Agents must never try to accept the Talon EULA. Do not use `talonbox click --vnc`, `talonbox type --vnc`, AppleScript, keyboard automation, or any other automation to accept the Talon EULA.
 
-The user should also choose a speech model through the Talon menu. A microphone does not need to be configured. This is also the time for the user to install any other apps they expect to test Talon with.
+After accepting the EULA, the user must choose a speech model manually from the Talon menu. If no speech model is installed and selected, the VM may look ready but `talonbox smoke-test` can fail when it tries to dispatch a spoken command.
+
+Give the user this first-run checklist:
+
+1. Accept the Talon EULA.
+2. Open the Talon menu.
+3. Install and select a speech model.
+4. Leave microphone setup alone unless they specifically want to configure it.
+5. Tell the agent when Talon is running at the desktop.
+
+This is also the time for the user to install any other apps they expect to test Talon with.
 
 ## 6. Run the setup smoke test and grant permissions
 
@@ -263,7 +273,7 @@ After any permission click or typed confirmation, verify that the visible state 
 ```bash
 talonbox screenshot --vnc {quoted_name} /tmp/permission-after-vnc.png
 talonbox screenshot {quoted_name} /tmp/permission-after-talon.png
-talonbox type --vnc {quoted_name} $'\\n'
+talonbox press --vnc {quoted_name} enter
 ```
 
 Repeat the permission or prompt handling until `talonbox smoke-test --in-place {quoted_name}` passes. When in doubt, run `talonbox status {name}` yourself, then hand the step to the user with the actual VNC URL and viewer command:
@@ -809,6 +819,37 @@ def click_command(
 @pass_settings
 def type_command(settings: CliSettings, vnc: bool, name: str, text: str) -> None:
     _build_talon_client(settings, name).type_text(text, vnc=vnc)
+
+
+@cli.command(
+    name="press",
+    short_help="Press one key inside the VM.",
+    help=(
+        "Press KEY inside the VM.\n\n"
+        "By default this uses Talon's key action and requires Talon's REPL. Use "
+        "`--vnc` to send the key through the VM's VNC connection instead."
+    ),
+    epilog=_examples_epilog(
+        "talonbox press experiment enter",
+        "talonbox press --vnc experiment enter",
+        "talonbox press --vnc experiment space",
+    ),
+)
+@click.option(
+    "--vnc",
+    "vnc",
+    is_flag=True,
+    help="Use the VM's VNC connection instead of Talon's key action.",
+)
+@click.argument("name", metavar="NAME")
+@click.argument(
+    "key",
+    metavar="KEY",
+    type=click.Choice(["enter", "return", "space", "tab", "escape"]),
+)
+@pass_settings
+def press_command(settings: CliSettings, vnc: bool, name: str, key: str) -> None:
+    _build_talon_client(settings, name).press_key(key, vnc=vnc)
 
 
 @cli.command(

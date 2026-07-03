@@ -18,6 +18,11 @@ VNC_MOUSE_BUTTONS = {
     "middle": 2,
     "right": 3,
 }
+VNC_KEY_ALIASES = {
+    "return": "enter",
+    "space": " ",
+    "escape": "esc",
+}
 
 
 def shutdown_vnc_reactor() -> None:
@@ -62,6 +67,16 @@ class VncClient:
         except Exception as error:
             raise click.ClickException(f"VNC type failed: {error}") from None
 
+    def press_key(self, key: str) -> None:
+        key = self._normalize_key(key)
+        try:
+            with self._connect(timeout=VNC_INPUT_TIMEOUT_SECONDS) as client:
+                client.keyPress(key)
+        except click.ClickException:
+            raise
+        except Exception as error:
+            raise click.ClickException(f"VNC key press failed: {error}") from None
+
     def _connect(self, *, timeout: float) -> Any:
         if not self.running_vm.vnc_url:
             raise click.ClickException("VM does not expose a VNC URL.")
@@ -87,6 +102,9 @@ class VncClient:
             else:
                 keys.append(char)
         return keys
+
+    def _normalize_key(self, key: str) -> str:
+        return VNC_KEY_ALIASES.get(key, key)
 
     def _parse_vnc_url(self, vnc_url: str) -> tuple[str, str | None]:
         parsed = urlparse(vnc_url)

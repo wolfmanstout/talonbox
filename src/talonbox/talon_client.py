@@ -124,6 +124,24 @@ class TalonClient:
         if result.returncode:
             raise click.exceptions.Exit(result.returncode)
 
+    def press_key(self, key: str, *, vnc: bool = False) -> None:
+        if vnc:
+            self.vnc_client.press_key(key)
+            return
+
+        key = "enter" if key == "return" else key
+        code = "\n".join(
+            [
+                "from talon import actions",
+                f"actions.key({key!r})",
+                "",
+            ]
+        )
+        self.running_vm.wait_for_talon_repl()
+        result = self.running_vm.run_repl(f"exec({code!r})\n")
+        if result.returncode:
+            raise click.exceptions.Exit(result.returncode)
+
     def capture_screenshot(self, filepath: Path, *, vnc: bool = False) -> None:
         if vnc:
             self.vnc_client.capture_screenshot(filepath)
