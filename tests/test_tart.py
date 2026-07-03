@@ -189,3 +189,47 @@ def test_wait_for_running_vm_persists_vnc_url(
 
     assert info.vnc_url == "vnc://127.0.0.1:5901"
     assert tart_module.read_vnc_url("talon-test") == "vnc://127.0.0.1:5901"
+
+
+def test_wait_for_running_vm_requires_fresh_vnc_url_for_launch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    log_path = tmp_path / "tart-run.log"
+    log_path.write_text("Booting\n", encoding="utf-8")
+    launch = tart_module.VmLaunch(
+        process=cast(
+            subprocess.Popen[bytes], type("Process", (), {"poll": lambda self: None})()
+        ),
+        log_path=log_path,
+    )
+    monkeypatch.setattr(
+        tart_module, "_vnc_url_path", lambda name: tmp_path / f"{name}.vnc"
+    )
+    tart_module.write_vnc_url("talon-test", "vnc://127.0.0.1:5901")
+    monkeypatch.setattr(
+        tart_module,
+        "get_vm_info",
+        lambda name, debug=False: VmInfo(
+            name, "running", "192.168.64.10", tart_module.read_vnc_url(name)
+        ),
+    )
+    extract_calls = 0
+
+    def fake_extract_vnc_url(log_path: Path) -> str | None:
+        nonlocal extract_calls
+        extract_calls += 1
+        if extract_calls == 1:
+            return None
+        return "vnc://127.0.0.1:5902"
+
+    monkeypatch.setattr(tart_module, "_extract_vnc_url", fake_extract_vnc_url)
+
+    info = tart_module.wait_for_running_vm(
+        "talon-test",
+        timeout=1.0,
+        interval=0.0,
+        launch=launch,
+    )
+
+    assert info.vnc_url == "vnc://127.0.0.1:5902"
+    assert tart_module.read_vnc_url("talon-test") == "vnc://127.0.0.1:5902"

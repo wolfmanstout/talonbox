@@ -119,7 +119,7 @@ def wait_for_running_vm(
         if vnc_url:
             write_vnc_url(name, vnc_url)
             info.vnc_url = vnc_url
-        if info.status == "running" and info.ip_address:
+        if info.status == "running" and info.ip_address and (launch is None or vnc_url):
             return info
         if launch is not None:
             returncode = launch.process.poll()
