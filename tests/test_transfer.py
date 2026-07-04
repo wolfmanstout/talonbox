@@ -130,10 +130,16 @@ def test_transfer_service_rsync_uses_fixed_vm_shell(
     )
 
     def fake_run(
-        cmd: list[str], check: bool = False
-    ) -> subprocess.CompletedProcess[bytes]:
+        cmd: list[str],
+        *,
+        check: bool,
+        text: bool,
+        capture_output: bool,
+        stdin: object,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, text, capture_output, stdin
         recorded.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr("talonbox.transfer.subprocess.run", fake_run)
 
@@ -155,6 +161,46 @@ def test_transfer_service_rsync_uses_fixed_vm_shell(
     ]
 
 
+def test_transfer_service_rsync_retries_transient_ssh_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+    _, transfer_service, _ = build_service_stack()
+    monkeypatch.setattr(
+        transfer_service,
+        "_sandbox_command_prefix",
+        lambda: ["sandbox-exec", "-p", "(profile)"],
+    )
+    monkeypatch.setattr("talonbox.transfer.time.sleep", lambda seconds: None)
+
+    def fake_run(
+        cmd: list[str],
+        *,
+        check: bool,
+        text: bool,
+        capture_output: bool,
+        stdin: object,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, text, capture_output, stdin
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return subprocess.CompletedProcess(
+                cmd,
+                255,
+                "",
+                "ssh_askpass: exec(/usr/X11R6/bin/ssh-askpass): No such file or directory\n"
+                "admin@192.168.64.10: Permission denied (publickey,password,keyboard-interactive).",
+            )
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("talonbox.transfer.subprocess.run", fake_run)
+
+    returncode = transfer_service.rsync(["-av", "src/", "talon-test:/tmp/dest"])
+
+    assert returncode == 0
+    assert attempts["count"] == 2
+
+
 def test_transfer_service_scp_uses_fixed_vm_ssh_options(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -167,10 +213,16 @@ def test_transfer_service_scp_uses_fixed_vm_ssh_options(
     )
 
     def fake_run(
-        cmd: list[str], check: bool = False
-    ) -> subprocess.CompletedProcess[bytes]:
+        cmd: list[str],
+        *,
+        check: bool,
+        text: bool,
+        capture_output: bool,
+        stdin: object,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, text, capture_output, stdin
         recorded.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr("talonbox.transfer.subprocess.run", fake_run)
 

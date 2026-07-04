@@ -3,6 +3,8 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+import sys
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +12,12 @@ from pathlib import Path
 import click
 
 from .names import validate_public_vm_name
-from .vm import RunningVm
+from .vm import (
+    TRANSIENT_RETRY_ATTEMPTS,
+    TRANSIENT_RETRY_DELAY_SECONDS,
+    RunningVm,
+    is_transient_transport_error,
+)
 
 HOST_OUTPUT_ROOT = Path("/tmp")
 DEVICE_ROOT = Path("/dev")
@@ -365,11 +372,42 @@ class TransferService:
     def _run_transfer(self, cmd: list[str]) -> int:
         if self.running_vm.debug:
             click.echo(f"+ {shlex.join(cmd)}", err=True)
-        result = subprocess.run(cmd, check=False)
-        if result.returncode and self._sandbox_command_prefix():
-            click.echo(
-                "HINT transfers run inside a macOS sandbox; extra host-side writes "
-                "outside /tmp fail with 'Operation not permitted'.",
-                err=True,
+
+        attempts = 0
+        while True:
+            result = subprocess.run(
+                cmd,
+                check=False,
+                text=True,
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
             )
-        return result.returncode
+            if result.returncode == 0:
+                self._write_transfer_output(result)
+                return result.returncode
+
+            message = self._process_transfer_output(result)
+            if attempts < TRANSIENT_RETRY_ATTEMPTS and is_transient_transport_error(
+                message
+            ):
+                attempts += 1
+                time.sleep(TRANSIENT_RETRY_DELAY_SECONDS)
+                continue
+
+            self._write_transfer_output(result)
+            if self._sandbox_command_prefix():
+                click.echo(
+                    "HINT transfers run inside a macOS sandbox; extra host-side writes "
+                    "outside /tmp fail with 'Operation not permitted'.",
+                    err=True,
+                )
+            return result.returncode
+
+    def _process_transfer_output(self, result: subprocess.CompletedProcess[str]) -> str:
+        return "\n".join(part for part in (result.stderr, result.stdout) if part)
+
+    def _write_transfer_output(self, result: subprocess.CompletedProcess[str]) -> None:
+        if result.stdout:
+            sys.stdout.write(result.stdout)
+        if result.stderr:
+            sys.stderr.write(result.stderr)

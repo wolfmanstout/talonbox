@@ -22,6 +22,17 @@ TALON_POST_RESTART_SETTLE_SECONDS = 3.0
 TRANSIENT_RETRY_DELAY_SECONDS = 1.0
 TRANSIENT_RETRY_ATTEMPTS = 2
 CONCURRENCY_LIMIT_HINT = "macOS Virtualization commonly allows only 2 running VMs; stop another VM and retry."
+TRANSIENT_TRANSPORT_ERROR_NEEDLES = (
+    "ssh_askpass",
+    "permission denied (publickey,password,keyboard-interactive)",
+    "connection reset by peer",
+    "connection refused",
+    "connection closed by remote host",
+    "operation timed out",
+    "no route to host",
+    "kex_exchange_identification",
+    "broken pipe",
+)
 
 
 class TransportError(RuntimeError):
@@ -42,6 +53,11 @@ def _timeout_output(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode(errors="replace")
     return value
+
+
+def is_transient_transport_error(message: str) -> bool:
+    lower_message = message.lower()
+    return any(needle in lower_message for needle in TRANSIENT_TRANSPORT_ERROR_NEEDLES)
 
 
 class RunningVm:
@@ -282,25 +298,12 @@ class RunningVm:
             if result.returncode == 0 or not poll:
                 if result.returncode == 0:
                     return result
-                if attempts < TRANSIENT_RETRY_ATTEMPTS:
-                    message = _process_output(result).lower()
-                    if any(
-                        needle in message
-                        for needle in (
-                            "ssh_askpass",
-                            "permission denied (publickey,password,keyboard-interactive)",
-                            "connection reset by peer",
-                            "connection refused",
-                            "connection closed by remote host",
-                            "operation timed out",
-                            "no route to host",
-                            "kex_exchange_identification",
-                            "broken pipe",
-                        )
-                    ):
-                        attempts += 1
-                        time.sleep(TRANSIENT_RETRY_DELAY_SECONDS)
-                        continue
+                if attempts < TRANSIENT_RETRY_ATTEMPTS and is_transient_transport_error(
+                    _process_output(result)
+                ):
+                    attempts += 1
+                    time.sleep(TRANSIENT_RETRY_DELAY_SECONDS)
+                    continue
                 return result
             if deadline is not None and time.monotonic() >= deadline:
                 return result
