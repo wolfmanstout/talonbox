@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from talonbox import cli as cli_module
 from talonbox.cli import cli
 from talonbox.tart import VmInfo
-from talonbox.vm import VmController
+from talonbox.vm import StartResult, VmController
 from tests.helpers import running_vm_fixture
 
 
@@ -448,7 +448,7 @@ def test_start_command_delegates_to_vm_controller(
 
     def fake_start(self: VmController, *, require_talon: bool = True):
         calls.append((self.vm, require_talon))
-        return running_vm_fixture()
+        return StartResult(running_vm_fixture(), "booted")
 
     monkeypatch.setattr(cli_module.VmController, "start", fake_start)
     monkeypatch.setattr(
@@ -460,7 +460,7 @@ def test_start_command_delegates_to_vm_controller(
     result = runner.invoke(cli, ["start", "experiment"])
 
     assert result.exit_code == 0
-    assert result.output == "name: experiment\nstatus: running\n"
+    assert result.output == "start: booted\nname: experiment\nstatus: running\n"
     assert calls == [("experiment", True)]
 
 
@@ -472,7 +472,7 @@ def test_start_command_can_skip_talon(
 
     def fake_start(self: VmController, *, require_talon: bool = True):
         calls.append((self.vm, require_talon))
-        return running_vm_fixture()
+        return StartResult(running_vm_fixture(), "resumed from suspend")
 
     monkeypatch.setattr(cli_module.VmController, "start", fake_start)
     monkeypatch.setattr(
@@ -484,7 +484,10 @@ def test_start_command_can_skip_talon(
     result = runner.invoke(cli, ["start", "--no-talon", "experiment"])
 
     assert result.exit_code == 0
-    assert result.output == "name: experiment\nstatus: running\n"
+    assert (
+        result.output
+        == "start: resumed from suspend\nname: experiment\nstatus: running\n"
+    )
     assert calls == [("experiment", False)]
 
 
@@ -598,12 +601,10 @@ def test_restart_talon_command_delegates_to_vm_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = CliRunner()
-    calls: list[tuple[str, bool, bool]] = []
+    calls: list[str] = []
 
-    def fake_restart_talon(
-        self: VmController, *, wipe_user_dir: bool, clean_logs: bool
-    ) -> None:
-        calls.append((self.vm, wipe_user_dir, clean_logs))
+    def fake_restart_talon(self: VmController) -> None:
+        calls.append(self.vm)
 
     monkeypatch.setattr(cli_module.VmController, "restart_talon", fake_restart_talon)
 
@@ -611,7 +612,7 @@ def test_restart_talon_command_delegates_to_vm_controller(
 
     assert result.exit_code == 0
     assert result.output == "Restart Talon successful\n"
-    assert calls == [("experiment", False, True)]
+    assert calls == ["experiment"]
 
 
 def test_stop_command_delegates_to_vm_controller(

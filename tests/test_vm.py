@@ -264,7 +264,10 @@ def test_vm_controller_start_resumes_existing_vm_and_ensures_talon(
     )
     monkeypatch.setattr(vm_module.tart, "cleanup_launch_log", lambda log_path: None)
 
-    assert vm_controller.start() is running_vm
+    result = vm_controller.start()
+
+    assert result.running_vm is running_vm
+    assert result.action == "booted"
     assert calls == [
         ("get_vm_info", "talonbox-experiment"),
         ("spawn_vm", "talonbox-experiment"),
@@ -297,8 +300,46 @@ def test_vm_controller_start_reuses_running_vm_without_spawn(
     monkeypatch.setattr(running_vm, "prevent_idle_lock", lambda: None)
     monkeypatch.setattr(running_vm, "ensure_talon_running", lambda: None)
 
-    assert vm_controller.start() is running_vm
+    result = vm_controller.start()
+
+    assert result.running_vm is running_vm
+    assert result.action == "already running"
     assert spawn_calls == []
+
+
+def test_vm_controller_start_reports_resume_from_suspend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    running_vm = running_vm_fixture()
+
+    monkeypatch.setattr(
+        vm_module.tart,
+        "get_vm_info",
+        lambda vm, debug=False: VmInfo(vm, "suspended", None),
+    )
+    monkeypatch.setattr(
+        vm_module.tart,
+        "spawn_vm",
+        lambda vm, debug=False: fake_launch(),
+    )
+    monkeypatch.setattr(
+        vm_module.tart,
+        "wait_for_running_vm",
+        lambda vm, timeout, debug=False, launch=None: VmInfo(
+            vm, "running", "192.168.64.10"
+        ),
+    )
+    monkeypatch.setattr(vm_controller, "_running_vm_from_info", lambda info: running_vm)
+    monkeypatch.setattr(running_vm, "probe_ssh", lambda *, timeout=0: None)
+    monkeypatch.setattr(running_vm, "prevent_idle_lock", lambda: None)
+    monkeypatch.setattr(running_vm, "ensure_talon_running", lambda: None)
+    monkeypatch.setattr(vm_module.tart, "cleanup_launch_log", lambda log_path: None)
+
+    result = vm_controller.start()
+
+    assert result.running_vm is running_vm
+    assert result.action == "resumed from suspend"
 
 
 def test_vm_controller_start_can_skip_talon_launch(
@@ -322,7 +363,10 @@ def test_vm_controller_start_can_skip_talon_launch(
         lambda: ensure_calls.append("ensure_talon_running"),
     )
 
-    assert vm_controller.start(require_talon=False) is running_vm
+    result = vm_controller.start(require_talon=False)
+
+    assert result.running_vm is running_vm
+    assert result.action == "already running"
     assert ensure_calls == []
 
 
@@ -417,16 +461,18 @@ def test_running_vm_restart_talon_waits_for_repl_and_sleeps(
     )
     monkeypatch.setattr(vm_module.time, "sleep", lambda seconds: sleeps.append(seconds))
 
-    running_vm.restart_talon(
-        wipe_user_dir=True,
-        clean_logs=True,
-    )
+    running_vm.restart_talon()
 
     assert calls[0] == ("192.168.64.10", "pkill -x Talon >/dev/null 2>&1 || true")
+    assert calls[1] == (
+        "192.168.64.10",
+        'mkdir -p "$HOME/.talon" && : > $HOME/.talon/talon.log && : > /tmp/talonbox-talon.log',
+    )
     assert (
         "192.168.64.10",
         "open -a /Applications/Talon.app --stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log",
     ) in calls
+    assert not any("find" in call[1] for call in calls if isinstance(call[1], str))
     assert calls[-1] == ("192.168.64.10", "wait_for_talon_repl")
     assert sleeps == [vm_module.TALON_POST_RESTART_SETTLE_SECONDS]
 
@@ -455,7 +501,7 @@ def test_running_vm_restart_talon_retries_transient_launch_failure(
     monkeypatch.setattr(running_vm, "wait_for_talon_repl", lambda **kwargs: None)
     monkeypatch.setattr(vm_module.time, "sleep", lambda seconds: sleeps.append(seconds))
 
-    running_vm.restart_talon(wipe_user_dir=False, clean_logs=False)
+    running_vm.restart_talon()
 
     assert launch_attempts == 2
     assert sleeps == [
@@ -473,13 +519,11 @@ def test_vm_controller_restart_talon_reports_click_exception(
     monkeypatch.setattr(
         running_vm,
         "restart_talon",
-        lambda *, wipe_user_dir, clean_logs: (_ for _ in ()).throw(
-            vm_module.RemoteCommandError("repl not ready")
-        ),
+        lambda: (_ for _ in ()).throw(vm_module.RemoteCommandError("repl not ready")),
     )
 
     with pytest.raises(click.ClickException, match="repl not ready"):
-        vm_controller.restart_talon(wipe_user_dir=False, clean_logs=True)
+        vm_controller.restart_talon()
 
 
 def test_running_vm_ensure_talon_running_skips_launch_when_running(

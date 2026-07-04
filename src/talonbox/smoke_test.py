@@ -12,7 +12,7 @@ import click
 from . import tart
 from .talon_client import TalonClient
 from .transfer import HOST_OUTPUT_ROOT, TransferService
-from .vm import RemoteCommandError, RunningVm, TransportError, VmController
+from .vm import RemoteCommandError, RunningVm, StartResult, TransportError, VmController
 
 MARKER_MIMIC_ATTEMPTS = 10
 MARKER_MIMIC_RETRY_DELAY_SECONDS = 1.0
@@ -105,11 +105,13 @@ class SmokeTestRunner:
                 )
                 cloned = True
 
-            running_vm = self.run_step(
+            start_result = self.run_step(
                 "Start the smoke-test VM" if clone else "Start the VM",
                 smoke_vm_controller.start,
                 success_message="Smoke-test VM started." if clone else "VM started.",
             )
+            assert isinstance(start_result, StartResult)
+            running_vm = start_result.running_vm
             assert isinstance(running_vm, RunningVm)
             started = True
             transfer_service = self._build_transfer_service(running_vm)
@@ -127,10 +129,7 @@ class SmokeTestRunner:
             )
             self.run_step(
                 "Restart Talon to load the uploaded bundle",
-                lambda: smoke_vm_controller.restart_talon(
-                    wipe_user_dir=False,
-                    clean_logs=True,
-                ),
+                smoke_vm_controller.restart_talon,
                 success_message="Talon restarted after upload.",
             )
             self.run_step(

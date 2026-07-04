@@ -4,6 +4,7 @@ import shlex
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -193,37 +194,25 @@ class RunningVm:
     def ssh_remote_path(self, guest_path: str) -> str:
         return f"{self.SSH_USERNAME}@{self.ip_address}:{guest_path}"
 
-    def restart_talon(
-        self,
-        *,
-        wipe_user_dir: bool,
-        clean_logs: bool,
-    ) -> None:
+    def restart_talon(self) -> None:
         self.run_shell("pkill -x Talon >/dev/null 2>&1 || true")
-        self._launch_talon(wipe_user_dir=wipe_user_dir, clean_logs=clean_logs)
+        self._truncate_talon_logs()
+        self._launch_talon()
 
     def ensure_talon_running(self) -> None:
         result = self.run_shell("pgrep -x Talon >/dev/null", check=False)
         if result.returncode == 0:
             self.wait_for_talon_repl(timeout=TALON_REPL_TIMEOUT_SECONDS)
             return
-        self._launch_talon(wipe_user_dir=False, clean_logs=False)
+        self._launch_talon()
 
-    def _launch_talon(
-        self,
-        *,
-        wipe_user_dir: bool,
-        clean_logs: bool,
-    ) -> None:
-        if clean_logs:
-            self.run_shell(
-                f'mkdir -p "$HOME/.talon" && : > {TALON_LOG} && : > /tmp/talonbox-talon.log'
-            )
+    def _truncate_talon_logs(self) -> None:
+        self.run_shell(
+            f'mkdir -p "$HOME/.talon" && : > {TALON_LOG} && : > /tmp/talonbox-talon.log'
+        )
+
+    def _launch_talon(self) -> None:
         self.run_shell('mkdir -p "$HOME/.talon/user"')
-        if wipe_user_dir:
-            self.run_shell(
-                'find "$HOME/.talon/user" -mindepth 1 -maxdepth 1 -exec rm -rf {} +'
-            )
         launch_command = (
             f"open -a {shlex.quote(TALON_APP)} "
             "--stdout /tmp/talonbox-talon.log --stderr /tmp/talonbox-talon.log"
@@ -308,6 +297,15 @@ class RunningVm:
             if deadline is not None and time.monotonic() >= deadline:
                 return result
             time.sleep(2.0)
+
+
+@dataclass(frozen=True, slots=True)
+class StartResult:
+    running_vm: RunningVm
+    action: str
+
+    def to_vm_info(self) -> tart.VmInfo:
+        return self.running_vm.to_vm_info()
 
 
 class VmController:
@@ -424,17 +422,21 @@ class VmController:
         except tart.TartError as error:
             raise click.ClickException(str(error)) from None
 
-    def start(self, *, require_talon: bool = True) -> RunningVm:
+    def start(self, *, require_talon: bool = True) -> StartResult:
         info = self.get_vm()
         launch = None
         try:
             if info.status == "running":
                 ready_info = info
+                action = "already running"
             else:
                 if not self._is_inactive(info.status):
                     raise click.ClickException(
                         f"VM is not stopped or suspended: {self.vm} ({info.status})"
                     )
+                action = (
+                    "resumed from suspend" if info.status == "suspended" else "booted"
+                )
                 launch = tart.spawn_vm(self.tart_vm, debug=self.debug)
                 ready_info = self._public_vm_info(
                     tart.wait_for_running_vm(
@@ -462,19 +464,11 @@ class VmController:
 
         if launch is not None:
             tart.cleanup_launch_log(launch.log_path)
-        return running_vm
+        return StartResult(running_vm=running_vm, action=action)
 
-    def restart_talon(
-        self,
-        *,
-        wipe_user_dir: bool,
-        clean_logs: bool,
-    ) -> None:
+    def restart_talon(self) -> None:
         try:
-            self.get_running_vm().restart_talon(
-                wipe_user_dir=wipe_user_dir,
-                clean_logs=clean_logs,
-            )
+            self.get_running_vm().restart_talon()
         except (RemoteCommandError, TransportError) as error:
             raise click.ClickException(str(error)) from None
 

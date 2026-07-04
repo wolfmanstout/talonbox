@@ -9,6 +9,7 @@ import pytest
 from talonbox.smoke_test import GUEST_SMOKE_BUNDLE_PATH, SmokeTestRunner
 from talonbox.tart import VmInfo
 from talonbox.transfer import TransferService
+from talonbox.vm import StartResult
 from tests.helpers import build_service_stack, running_vm_fixture
 
 
@@ -405,7 +406,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
     monkeypatch.setattr(
         temp_controller,
         "start",
-        lambda: steps.append("start") or running_vm,
+        lambda: steps.append("start") or StartResult(running_vm, "booted"),
     )
     monkeypatch.setattr(
         runner,
@@ -420,9 +421,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
     monkeypatch.setattr(
         temp_controller,
         "restart_talon",
-        lambda *, wipe_user_dir, clean_logs: steps.append(
-            f"restart:{wipe_user_dir}:{clean_logs}"
-        ),
+        lambda: steps.append("restart"),
     )
 
     class FakeClient:
@@ -493,7 +492,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "clone:True",
         "start",
         "rsync:-a",
-        "restart:False:True",
+        "restart",
         "show_desktop_probe",
         "capture:screenshot-desktop-probe-talon.ppm",
         "capture-vnc:screenshot-desktop-probe-vnc.ppm",
@@ -544,7 +543,7 @@ def test_smoke_test_runner_can_run_in_place_and_clean_up_guest_artifacts(
     monkeypatch.setattr(
         vm_controller,
         "start",
-        lambda: steps.append("start") or running_vm,
+        lambda: steps.append("start") or StartResult(running_vm, "already running"),
     )
     monkeypatch.setattr(
         runner,
@@ -567,9 +566,7 @@ def test_smoke_test_runner_can_run_in_place_and_clean_up_guest_artifacts(
     monkeypatch.setattr(
         vm_controller,
         "restart_talon",
-        lambda *, wipe_user_dir, clean_logs: steps.append(
-            f"restart:{wipe_user_dir}:{clean_logs}"
-        ),
+        lambda: steps.append("restart"),
     )
 
     class FakeClient:
@@ -637,7 +634,7 @@ def test_smoke_test_runner_can_run_in_place_and_clean_up_guest_artifacts(
     assert steps == [
         "start",
         "rsync:-a",
-        "restart:False:True",
+        "restart",
         "show_desktop_probe",
         "capture:screenshot-desktop-probe-talon.ppm",
         "capture-vnc:screenshot-desktop-probe-vnc.ppm",
@@ -687,7 +684,7 @@ def test_in_place_smoke_test_failure_leaves_guest_artifacts_for_debugging(
     monkeypatch.setattr(
         vm_controller,
         "start",
-        lambda: steps.append("start") or running_vm,
+        lambda: steps.append("start") or StartResult(running_vm, "already running"),
     )
     monkeypatch.setattr(
         runner,
@@ -710,9 +707,7 @@ def test_in_place_smoke_test_failure_leaves_guest_artifacts_for_debugging(
     monkeypatch.setattr(
         vm_controller,
         "restart_talon",
-        lambda *, wipe_user_dir, clean_logs: (_ for _ in ()).throw(
-            click.ClickException("talon restart failed")
-        ),
+        lambda: (_ for _ in ()).throw(click.ClickException("talon restart failed")),
     )
 
     with pytest.raises(click.exceptions.Exit) as error:
@@ -754,7 +749,7 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
     monkeypatch.setattr(
         temp_controller,
         "start",
-        lambda: running_vm_fixture(),
+        lambda: StartResult(running_vm_fixture(), "booted"),
     )
     monkeypatch.setattr(
         runner,
@@ -765,9 +760,7 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
     monkeypatch.setattr(
         temp_controller,
         "restart_talon",
-        lambda *, wipe_user_dir, clean_logs: (_ for _ in ()).throw(
-            click.ClickException("talon restart failed")
-        ),
+        lambda: (_ for _ in ()).throw(click.ClickException("talon restart failed")),
     )
     monkeypatch.setattr(
         temp_controller,
@@ -821,7 +814,7 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
     monkeypatch.setattr(
         temp_controller,
         "start",
-        lambda: running_vm,
+        lambda: StartResult(running_vm, "booted"),
     )
     monkeypatch.setattr(
         runner,
@@ -832,7 +825,7 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
     monkeypatch.setattr(
         temp_controller,
         "restart_talon",
-        lambda *, wipe_user_dir, clean_logs: None,
+        lambda: None,
     )
 
     class FakeClient:

@@ -534,10 +534,9 @@ def open_command(settings: CliSettings, name: str) -> None:
 @pass_settings
 def start(settings: CliSettings, name: str, no_talon: bool) -> None:
     vm_controller = VmController(name, settings.debug)
-    _echo_vm_info(
-        vm_controller,
-        vm_controller.start(require_talon=not no_talon).to_vm_info(),
-    )
+    result = vm_controller.start(require_talon=not no_talon)
+    click.echo(f"start: {result.action}")
+    _echo_vm_info(vm_controller, result.to_vm_info())
 
 
 @cli.command(
@@ -552,10 +551,7 @@ def start(settings: CliSettings, name: str, no_talon: bool) -> None:
 @click.argument("name", metavar="NAME")
 @pass_settings
 def restart_talon(settings: CliSettings, name: str) -> None:
-    VmController(name, settings.debug).restart_talon(
-        wipe_user_dir=False,
-        clean_logs=True,
-    )
+    VmController(name, settings.debug).restart_talon()
     _echo_success("Restart Talon")
 
 
