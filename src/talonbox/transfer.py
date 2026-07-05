@@ -21,10 +21,94 @@ from .vm import (
 
 HOST_OUTPUT_ROOT = Path("/tmp")
 DEVICE_ROOT = Path("/dev")
-RSYNC_VALUE_OPTIONS = {
+
+
+@dataclass(frozen=True, slots=True)
+class TransferOptionPolicy:
+    short_flags: set[str]
+    long_flags: set[str]
+    value_options: set[str]
+
+
+RSYNC_SHORT_FLAG_OPTIONS = {
+    "-A",
+    "-C",
+    "-D",
+    "-E",
+    "-H",
+    "-I",
+    "-L",
+    "-O",
+    "-P",
+    "-R",
+    "-S",
+    "-W",
+    "-X",
+    "-a",
+    "-c",
+    "-d",
+    "-g",
+    "-h",
+    "-l",
+    "-n",
+    "-o",
+    "-p",
+    "-q",
+    "-r",
+    "-t",
+    "-u",
+    "-v",
+    "-x",
+    "-z",
+}
+RSYNC_LONG_FLAG_OPTIONS = {
+    "--acls",
+    "--archive",
+    "--checksum",
+    "--compress",
+    "--copy-links",
+    "--cvs-exclude",
+    "--delete",
+    "--delete-after",
+    "--delete-before",
+    "--delete-delay",
+    "--delete-during",
+    "--devices",
+    "--dirs",
+    "--dry-run",
+    "--executability",
+    "--existing",
+    "--group",
+    "--hard-links",
+    "--human-readable",
+    "--ignore-existing",
+    "--ignore-times",
+    "--inplace",
+    "--itemize-changes",
+    "--links",
+    "--mkpath",
+    "--omit-dir-times",
+    "--one-file-system",
+    "--owner",
+    "--partial",
+    "--perms",
+    "--progress",
+    "--prune-empty-dirs",
+    "--quiet",
+    "--recursive",
+    "--relative",
+    "--sparse",
+    "--specials",
+    "--stats",
+    "--times",
+    "--update",
+    "--verbose",
+    "--whole-file",
+    "--xattrs",
+}
+RSYNC_OPTIONS_WITH_VALUES = {
     "-B",
     "-f",
-    "-M",
     "-T",
     "--backup-dir",
     "--block-size",
@@ -52,13 +136,34 @@ RSYNC_VALUE_OPTIONS = {
     "--suffix",
     "--temp-dir",
 }
-RSYNC_REJECTED_OPTIONS = {
-    "-e",
-    "--rsync-path",
-    "--rsh",
+SCP_SHORT_FLAG_OPTIONS = {
+    "-1",
+    "-2",
+    "-3",
+    "-4",
+    "-6",
+    "-A",
+    "-B",
+    "-C",
+    "-O",
+    "-p",
+    "-q",
+    "-r",
+    "-T",
+    "-v",
 }
-SCP_VALUE_OPTIONS = {"-c", "-D", "-i", "-l", "-o", "-P", "-S", "-X"}
-SCP_REJECTED_OPTIONS = {"-F", "-J", "-o", "-S"}
+SCP_LONG_FLAG_OPTIONS: set[str] = set()
+SCP_OPTIONS_WITH_VALUES = {"-c", "-i", "-l", "-P", "-X"}
+RSYNC_OPTION_POLICY = TransferOptionPolicy(
+    short_flags=RSYNC_SHORT_FLAG_OPTIONS,
+    long_flags=RSYNC_LONG_FLAG_OPTIONS,
+    value_options=RSYNC_OPTIONS_WITH_VALUES,
+)
+SCP_OPTION_POLICY = TransferOptionPolicy(
+    short_flags=SCP_SHORT_FLAG_OPTIONS,
+    long_flags=SCP_LONG_FLAG_OPTIONS,
+    value_options=SCP_OPTIONS_WITH_VALUES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,69 +174,184 @@ class TransferOperand:
     vm: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ParsedTransferArgs:
+    passthrough: tuple[str, ...]
+    operands: tuple[TransferOperand, ...]
+    vm_name: str
+
+
+def parse_rsync_args(args: Sequence[str]) -> ParsedTransferArgs:
+    return _parse_transfer_args(args, option_policy=RSYNC_OPTION_POLICY)
+
+
+def parse_scp_args(args: Sequence[str]) -> ParsedTransferArgs:
+    return _parse_transfer_args(args, option_policy=SCP_OPTION_POLICY)
+
+
+def _parse_transfer_args(
+    args: Sequence[str],
+    *,
+    option_policy: TransferOptionPolicy,
+) -> ParsedTransferArgs:
+    passthrough, positionals = _split_transfer_options_and_operands(
+        args, option_policy=option_policy
+    )
+    if len(positionals) < 2:
+        raise click.ClickException(
+            "Transfer requires at least one source and one destination"
+        )
+
+    operands = tuple(_classify_transfer_operand(arg) for arg in positionals)
+    vm_names = {operand.vm for operand in operands if operand.kind == "remote"}
+    if not vm_names:
+        raise click.ClickException(
+            "Transfer requires one VM operand written as NAME:/absolute/path"
+        )
+    if len(vm_names) != 1:
+        raise click.ClickException("All VM operands must name the same VM")
+    vm_name = next(iter(vm_names))
+    assert vm_name is not None
+
+    source_kinds = {source.kind for source in operands[:-1]}
+    if len(source_kinds) != 1:
+        raise click.ClickException("Mixed local and VM sources are not allowed")
+    source_kind = next(iter(source_kinds))
+    destination = operands[-1]
+    if source_kind == destination.kind:
+        if source_kind == "local":
+            raise click.ClickException(
+                "Local-to-local transfers are not allowed; use NAME:/path for the VM"
+            )
+        raise click.ClickException("VM-to-VM transfers are not allowed")
+
+    return ParsedTransferArgs(
+        passthrough=tuple(passthrough),
+        operands=operands,
+        vm_name=vm_name,
+    )
+
+
+def _split_transfer_options_and_operands(
+    args: Sequence[str],
+    *,
+    option_policy: TransferOptionPolicy,
+) -> tuple[list[str], list[str]]:
+    passthrough: list[str] = []
+    positionals: list[str] = []
+    index = 0
+    parsing_options = True
+
+    while index < len(args):
+        arg = args[index]
+        if parsing_options and arg == "--":
+            passthrough.append(arg)
+            parsing_options = False
+            index += 1
+            continue
+        if not parsing_options or not arg.startswith("-") or arg == "-":
+            positionals.append(arg)
+            index += 1
+            continue
+
+        if arg.startswith("--"):
+            option, has_value, _ = arg.partition("=")
+            if (
+                option not in option_policy.long_flags
+                and option not in option_policy.value_options
+            ):
+                raise click.ClickException(
+                    f"Option not allowed for VM-only transfer safety: {option}"
+                )
+            if has_value and option not in option_policy.value_options:
+                raise click.ClickException(f"Option does not take a value: {option}")
+            passthrough.append(arg)
+            index += 1
+            if has_value or option not in option_policy.value_options:
+                continue
+            if index >= len(args):
+                raise click.ClickException(f"Option requires a value: {option}")
+            passthrough.append(args[index])
+            index += 1
+            continue
+
+        short_option = _validate_short_transfer_option(arg, option_policy=option_policy)
+        passthrough.append(arg)
+        index += 1
+        if short_option not in option_policy.value_options or len(arg) > 2:
+            continue
+        if index >= len(args):
+            raise click.ClickException(f"Option requires a value: {short_option}")
+        passthrough.append(args[index])
+        index += 1
+
+    return passthrough, positionals
+
+
+def _validate_short_transfer_option(
+    arg: str,
+    *,
+    option_policy: TransferOptionPolicy,
+) -> str:
+    short_option = arg[:2]
+    if short_option in option_policy.value_options:
+        return short_option
+
+    for character in arg[1:]:
+        option = f"-{character}"
+        if option in option_policy.value_options:
+            raise click.ClickException(
+                f"Option with a value must not be combined: {option}"
+            )
+        if option not in option_policy.short_flags:
+            raise click.ClickException(
+                f"Option not allowed for VM-only transfer safety: {option}"
+            )
+    return short_option
+
+
+def _classify_transfer_operand(raw: str) -> TransferOperand:
+    remote_name, separator, path = raw.partition(":")
+    if separator:
+        if raw.startswith("rsync://"):
+            raise click.ClickException(
+                f"Only NAME:/path VM operands are allowed: {raw}"
+            )
+        remote_name = validate_public_vm_name(remote_name)
+        if not path:
+            raise click.ClickException(f"VM path must not be empty: {raw}")
+        if not path.startswith("/"):
+            raise click.ClickException(f"VM path must be absolute: {raw}")
+        return TransferOperand(
+            raw=raw,
+            kind="remote",
+            path=path,
+            vm=remote_name,
+        )
+    return TransferOperand(raw=raw, kind="local", path=raw)
+
+
 class TransferService:
     def __init__(self, running_vm: RunningVm) -> None:
         self.running_vm = running_vm
 
-    def prepare_rsync_args(self, args: Sequence[str]) -> list[str]:
-        return self._build_transfer_command_args(
-            args,
-            self.running_vm,
-            value_options=RSYNC_VALUE_OPTIONS,
-            rejected_options=RSYNC_REJECTED_OPTIONS,
-        )
-
-    def prepare_scp_args(self, args: Sequence[str]) -> list[str]:
-        return self._build_transfer_command_args(
-            args,
-            self.running_vm,
-            value_options=SCP_VALUE_OPTIONS,
-            rejected_options=SCP_REJECTED_OPTIONS,
-        )
-
-    @classmethod
-    def extract_rsync_vm_name(cls, args: Sequence[str]) -> str:
-        return cls._extract_vm_name(
-            args,
-            value_options=RSYNC_VALUE_OPTIONS,
-            rejected_options=RSYNC_REJECTED_OPTIONS,
-        )
-
-    @classmethod
-    def extract_scp_vm_name(cls, args: Sequence[str]) -> str:
-        return cls._extract_vm_name(
-            args,
-            value_options=SCP_VALUE_OPTIONS,
-            rejected_options=SCP_REJECTED_OPTIONS,
-        )
-
-    def rsync(self, args: Sequence[str]) -> int:
+    def rsync(self, args: ParsedTransferArgs) -> int:
         return self._run_transfer(
             [
                 *self._sandbox_command_prefix(),
                 "rsync",
                 "-e",
                 self.running_vm.ssh_command_for_rsync(),
-                *self._build_transfer_command_args(
-                    args,
-                    self.running_vm,
-                    value_options=RSYNC_VALUE_OPTIONS,
-                    rejected_options=RSYNC_REJECTED_OPTIONS,
-                ),
+                *self._build_transfer_command_args(args, self.running_vm),
             ],
         )
 
-    def scp(self, args: Sequence[str]) -> int:
+    def scp(self, args: ParsedTransferArgs) -> int:
         return self._run_transfer(
             [
                 *self._sandbox_command_prefix(),
                 *self.running_vm.scp_command_prefix(),
-                *self._build_transfer_command_args(
-                    args,
-                    self.running_vm,
-                    value_options=SCP_VALUE_OPTIONS,
-                    rejected_options=SCP_REJECTED_OPTIONS,
-                ),
+                *self._build_transfer_command_args(args, self.running_vm),
             ]
         )
 
@@ -158,49 +378,16 @@ class TransferService:
 
     def _build_transfer_command_args(
         self,
-        args: Sequence[str],
+        parsed_args: ParsedTransferArgs,
         running_vm: RunningVm,
-        *,
-        value_options: set[str],
-        rejected_options: set[str],
     ) -> list[str]:
-        passthrough, positionals = self._split_transfer_options_and_operands(
-            args,
-            value_options=value_options,
-            rejected_options=rejected_options,
-        )
-        if len(positionals) < 2:
+        if parsed_args.vm_name != running_vm.name:
             raise click.ClickException(
-                "Transfer requires at least one source and one destination"
+                f"Transfer operands name {parsed_args.vm_name!r}, but connected VM is {running_vm.name!r}"
             )
 
-        sources = [self._classify_transfer_operand(arg) for arg in positionals[:-1]]
-        destination = self._classify_transfer_operand(positionals[-1])
-
-        remote_vms = {
-            operand.vm
-            for operand in [*sources, destination]
-            if operand.kind == "remote"
-        }
-        if not remote_vms:
-            raise click.ClickException(
-                "Transfer requires one VM operand written as NAME:/absolute/path"
-            )
-        if remote_vms != {running_vm.name}:
-            raise click.ClickException(
-                f"Transfer operands name {next(iter(remote_vms))!r}, but connected VM is {running_vm.name!r}"
-            )
-
-        source_kinds = {source.kind for source in sources}
-        if len(source_kinds) != 1:
-            raise click.ClickException("Mixed local and VM sources are not allowed")
-        source_kind = next(iter(source_kinds))
-        if source_kind == destination.kind:
-            if source_kind == "local":
-                raise click.ClickException(
-                    "Local-to-local transfers are not allowed; use NAME:/path for the VM"
-                )
-            raise click.ClickException("VM-to-VM transfers are not allowed")
+        sources = list(parsed_args.operands[:-1])
+        destination = parsed_args.operands[-1]
         if destination.kind == "local":
             destination = TransferOperand(
                 raw=destination.raw,
@@ -213,116 +400,7 @@ class TransferService:
             self._rewrite_transfer_operand(running_vm, operand)
             for operand in [*sources, destination]
         ]
-        return [*passthrough, *rewritten]
-
-    @classmethod
-    def _extract_vm_name(
-        cls,
-        args: Sequence[str],
-        *,
-        value_options: set[str],
-        rejected_options: set[str],
-    ) -> str:
-        _, positionals = cls._split_transfer_options_and_operands(
-            args,
-            value_options=value_options,
-            rejected_options=rejected_options,
-        )
-        vm_names = {
-            operand.vm
-            for operand in (cls._classify_transfer_operand(arg) for arg in positionals)
-            if operand.kind == "remote"
-        }
-        if not vm_names:
-            raise click.ClickException(
-                "Transfer requires one VM operand written as NAME:/absolute/path"
-            )
-        if len(vm_names) != 1:
-            raise click.ClickException("All VM operands must name the same VM")
-        vm_name = next(iter(vm_names))
-        assert vm_name is not None
-        return vm_name
-
-    @staticmethod
-    def _split_transfer_options_and_operands(
-        args: Sequence[str],
-        *,
-        value_options: set[str],
-        rejected_options: set[str],
-    ) -> tuple[list[str], list[str]]:
-        passthrough: list[str] = []
-        positionals: list[str] = []
-        index = 0
-        parsing_options = True
-
-        while index < len(args):
-            arg = args[index]
-            if parsing_options and arg == "--":
-                passthrough.append(arg)
-                parsing_options = False
-                index += 1
-                continue
-            if not parsing_options or not arg.startswith("-") or arg == "-":
-                positionals.append(arg)
-                index += 1
-                continue
-
-            if arg.startswith("--"):
-                option, has_value, _ = arg.partition("=")
-                if option in rejected_options:
-                    raise click.ClickException(
-                        f"Option not allowed for VM-only transfer safety: {option}"
-                    )
-                passthrough.append(arg)
-                index += 1
-                if has_value or option not in value_options:
-                    continue
-                if index >= len(args):
-                    raise click.ClickException(f"Option requires a value: {option}")
-                passthrough.append(args[index])
-                index += 1
-                continue
-
-            short_option = arg[:2]
-            if short_option in rejected_options:
-                raise click.ClickException(
-                    f"Option not allowed for VM-only transfer safety: {short_option}"
-                )
-            passthrough.append(arg)
-            index += 1
-            if short_option not in value_options or len(arg) > 2:
-                continue
-            if index >= len(args):
-                raise click.ClickException(f"Option requires a value: {short_option}")
-            passthrough.append(args[index])
-            index += 1
-
-        return passthrough, positionals
-
-    @staticmethod
-    def _classify_transfer_operand(raw: str) -> TransferOperand:
-        remote_name, separator, path = raw.partition(":")
-        if separator:
-            if remote_name == "guest":
-                raise click.ClickException(
-                    "guest: paths have been replaced by VM-named paths; use NAME:/absolute/path."
-                )
-            if raw.startswith("rsync://"):
-                raise click.ClickException(
-                    f"Only NAME:/path VM operands are allowed: {raw}"
-                )
-            remote_name = validate_public_vm_name(remote_name)
-            if not path:
-                raise click.ClickException(f"VM path must not be empty: {raw}")
-            if not path.startswith("/"):
-                raise click.ClickException(f"VM path must be absolute: {raw}")
-            return TransferOperand(
-                raw=raw,
-                kind="remote",
-                path=path,
-                vm=remote_name,
-            )
-        return TransferOperand(raw=raw, kind="local", path=raw)
+        return [*parsed_args.passthrough, *rewritten]
 
     def _rewrite_transfer_operand(
         self, running_vm: RunningVm, operand: TransferOperand

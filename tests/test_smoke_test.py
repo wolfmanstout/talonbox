@@ -416,7 +416,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
     monkeypatch.setattr(
         transfer_service,
         "rsync",
-        lambda args: steps.append(f"rsync:{args[0]}") or 0,
+        lambda args: steps.append(f"rsync:{args.passthrough[0]}") or 0,
     )
     monkeypatch.setattr(
         temp_controller,
@@ -553,7 +553,7 @@ def test_smoke_test_runner_can_run_in_place_and_clean_up_guest_artifacts(
     monkeypatch.setattr(
         transfer_service,
         "rsync",
-        lambda args: steps.append(f"rsync:{args[0]}") or 0,
+        lambda args: steps.append(f"rsync:{args.passthrough[0]}") or 0,
     )
     monkeypatch.setattr(
         running_vm,
@@ -694,7 +694,7 @@ def test_in_place_smoke_test_failure_leaves_guest_artifacts_for_debugging(
     monkeypatch.setattr(
         transfer_service,
         "rsync",
-        lambda args: steps.append(f"rsync:{args[0]}") or 0,
+        lambda args: steps.append(f"rsync:{args.passthrough[0]}") or 0,
     )
     monkeypatch.setattr(
         running_vm,

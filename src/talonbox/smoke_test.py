@@ -11,7 +11,7 @@ import click
 
 from . import tart
 from .talon_client import TalonClient
-from .transfer import HOST_OUTPUT_ROOT, TransferService
+from .transfer import HOST_OUTPUT_ROOT, TransferService, parse_rsync_args
 from .vm import RemoteCommandError, RunningVm, StartResult, TransportError, VmController
 
 MARKER_MIMIC_ATTEMPTS = 10
@@ -332,13 +332,14 @@ class SmokeTestRunner:
     def upload_bundle(
         self, transfer_service: TransferService, bundle_dir: Path
     ) -> None:
-        returncode = transfer_service.rsync(
+        parsed_args = parse_rsync_args(
             [
                 "-a",
                 f"{bundle_dir}/",
                 f"{transfer_service.running_vm.name}:{GUEST_SMOKE_BUNDLE_PATH}/",
             ]
         )
+        returncode = transfer_service.rsync(parsed_args)
         if returncode:
             raise click.ClickException(f"rsync failed with exit code {returncode}")
 

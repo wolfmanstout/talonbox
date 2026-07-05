@@ -129,7 +129,6 @@ class TalonClient:
             self.vnc_client.press_key(key)
             return
 
-        key = "enter" if key == "return" else key
         code = "\n".join(
             [
                 "from talon import actions",

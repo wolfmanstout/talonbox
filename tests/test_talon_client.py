@@ -306,7 +306,7 @@ def test_talon_client_press_key_uses_talon_key_action(
         ),
     )
 
-    talon_client.press_key("return")
+    talon_client.press_key("enter")
 
     assert "from talon import actions" in payloads[0]
     assert "actions.key('enter')" in payloads[0]

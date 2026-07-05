@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from talonbox import cli as cli_module
 from talonbox.cli import cli
 from talonbox.tart import VmInfo
+from talonbox.transfer import ParsedTransferArgs
 from talonbox.vm import StartResult, VmController
 from tests.helpers import running_vm_fixture
 
@@ -1001,19 +1002,21 @@ def test_rsync_command_reports_success_for_quiet_transfer(
 ) -> None:
     runner = CliRunner()
     running_vm = running_vm_fixture()
-    calls: list[tuple[str, tuple[str, ...]]] = []
+    calls: list[tuple[str, str, tuple[str, ...], tuple[str, ...]]] = []
 
-    monkeypatch.setattr(
-        cli_module.TransferService,
-        "extract_rsync_vm_name",
-        lambda args: "experiment",
-    )
     monkeypatch.setattr(
         cli_module.VmController, "get_running_vm", lambda self: running_vm
     )
 
-    def fake_rsync(self: object, args: tuple[str, ...]) -> int:
-        calls.append((running_vm.ip_address, args))
+    def fake_rsync(self: object, args: ParsedTransferArgs) -> int:
+        calls.append(
+            (
+                running_vm.ip_address,
+                args.vm_name,
+                args.passthrough,
+                tuple(operand.raw for operand in args.operands),
+            )
+        )
         return 0
 
     monkeypatch.setattr(cli_module.TransferService, "rsync", fake_rsync)
@@ -1033,7 +1036,9 @@ def test_rsync_command_reports_success_for_quiet_transfer(
     assert calls == [
         (
             "192.168.64.10",
-            ("-a", "./repo/", "experiment:/Users/admin/.talon/user/repo/"),
+            "experiment",
+            ("-a",),
+            ("./repo/", "experiment:/Users/admin/.talon/user/repo/"),
         )
     ]
 
@@ -1043,19 +1048,21 @@ def test_scp_command_reports_success_for_quiet_transfer(
 ) -> None:
     runner = CliRunner()
     running_vm = running_vm_fixture()
-    calls: list[tuple[str, tuple[str, ...]]] = []
+    calls: list[tuple[str, str, tuple[str, ...], tuple[str, ...]]] = []
 
-    monkeypatch.setattr(
-        cli_module.TransferService,
-        "extract_scp_vm_name",
-        lambda args: "experiment",
-    )
     monkeypatch.setattr(
         cli_module.VmController, "get_running_vm", lambda self: running_vm
     )
 
-    def fake_scp(self: object, args: tuple[str, ...]) -> int:
-        calls.append((running_vm.ip_address, args))
+    def fake_scp(self: object, args: ParsedTransferArgs) -> int:
+        calls.append(
+            (
+                running_vm.ip_address,
+                args.vm_name,
+                args.passthrough,
+                tuple(operand.raw for operand in args.operands),
+            )
+        )
         return 0
 
     monkeypatch.setattr(cli_module.TransferService, "scp", fake_scp)
@@ -1075,8 +1082,9 @@ def test_scp_command_reports_success_for_quiet_transfer(
     assert calls == [
         (
             "192.168.64.10",
+            "experiment",
+            ("-q",),
             (
-                "-q",
                 "./settings.talon",
                 "experiment:/Users/admin/.talon/user/settings.talon",
             ),

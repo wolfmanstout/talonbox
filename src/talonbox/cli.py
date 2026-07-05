@@ -13,7 +13,7 @@ import click
 from .names import to_tart_vm_name
 from .smoke_test import SmokeTestRunner
 from .talon_client import TalonClient
-from .transfer import TransferService
+from .transfer import TransferService, parse_rsync_args, parse_scp_args
 from .vm import VmController
 from .vnc_client import shutdown_vnc_reactor
 
@@ -663,9 +663,9 @@ def exec_command(settings: CliSettings, name: str, command: tuple[str, ...]) -> 
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="RSYNC_ARGS...")
 @pass_settings
 def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
-    vm_name = TransferService.extract_rsync_vm_name(args)
-    running_vm = VmController(vm_name, settings.debug).get_running_vm()
-    returncode = TransferService(running_vm).rsync(args)
+    parsed_args = parse_rsync_args(args)
+    running_vm = VmController(parsed_args.vm_name, settings.debug).get_running_vm()
+    returncode = TransferService(running_vm).rsync(parsed_args)
     if returncode:
         raise click.exceptions.Exit(returncode)
     _echo_success("Rsync")
@@ -691,9 +691,9 @@ def rsync(settings: CliSettings, args: tuple[str, ...]) -> None:
 @click.argument("args", nargs=-1, type=click.UNPROCESSED, metavar="SCP_ARGS...")
 @pass_settings
 def scp(settings: CliSettings, args: tuple[str, ...]) -> None:
-    vm_name = TransferService.extract_scp_vm_name(args)
-    running_vm = VmController(vm_name, settings.debug).get_running_vm()
-    returncode = TransferService(running_vm).scp(args)
+    parsed_args = parse_scp_args(args)
+    running_vm = VmController(parsed_args.vm_name, settings.debug).get_running_vm()
+    returncode = TransferService(running_vm).scp(parsed_args)
     if returncode:
         raise click.exceptions.Exit(returncode)
     _echo_success("Scp")
@@ -857,7 +857,7 @@ def type_command(settings: CliSettings, vnc: bool, name: str, text: str) -> None
 @click.argument(
     "key",
     metavar="KEY",
-    type=click.Choice(["enter", "return", "space", "tab", "escape"]),
+    type=click.Choice(["enter", "space", "tab", "escape"]),
 )
 @pass_settings
 def press_command(settings: CliSettings, vnc: bool, name: str, key: str) -> None:

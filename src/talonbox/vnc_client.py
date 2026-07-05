@@ -18,8 +18,7 @@ VNC_MOUSE_BUTTONS = {
     "middle": 2,
     "right": 3,
 }
-VNC_KEY_ALIASES = {
-    "return": "enter",
+VNC_KEY_NAMES = {
     "space": " ",
     "escape": "esc",
 }
@@ -68,7 +67,7 @@ class VncClient:
             raise click.ClickException(f"VNC type failed: {error}") from None
 
     def press_key(self, key: str) -> None:
-        key = self._normalize_key(key)
+        key = self._vnc_key_name(key)
         try:
             with self._connect(timeout=VNC_INPUT_TIMEOUT_SECONDS) as client:
                 client.keyPress(key)
@@ -103,8 +102,8 @@ class VncClient:
                 keys.append(char)
         return keys
 
-    def _normalize_key(self, key: str) -> str:
-        return VNC_KEY_ALIASES.get(key, key)
+    def _vnc_key_name(self, key: str) -> str:
+        return VNC_KEY_NAMES.get(key, key)
 
     def _parse_vnc_url(self, vnc_url: str) -> tuple[str, str | None]:
         parsed = urlparse(vnc_url)

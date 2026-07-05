@@ -145,7 +145,7 @@ def test_vnc_client_type_matches_vncdotool_type_key_mapping(
 
 @pytest.mark.parametrize(
     ("key", "expected"),
-    [("enter", "enter"), ("return", "enter"), ("space", " ")],
+    [("enter", "enter"), ("space", " ")],
 )
 def test_vnc_client_press_key_uses_vncdotool_key_mapping(
     monkeypatch: pytest.MonkeyPatch,
