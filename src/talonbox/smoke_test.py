@@ -236,9 +236,9 @@ class SmokeTestRunner:
             self._hint_vm_controller = None
             if clone and started:
                 self.run_step(
-                    "Stop the smoke-test VM",
-                    smoke_vm_controller.stop,
-                    success_message="Smoke-test VM stopped.",
+                    "Shut down the smoke-test VM",
+                    lambda: smoke_vm_controller.stop(shutdown=True),
+                    success_message="Smoke-test VM shut down.",
                 )
             if cloned:
                 self.run_step(

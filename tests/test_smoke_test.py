@@ -474,7 +474,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
     monkeypatch.setattr(
         temp_controller,
         "stop",
-        lambda: steps.append("stop"),
+        lambda *, shutdown=False: steps.append(f"stop:{shutdown}"),
     )
     monkeypatch.setattr(
         temp_controller,
@@ -506,7 +506,7 @@ def test_smoke_test_runner_success_runs_end_to_end(
         "capture:screenshot-after-visual-change.png",
         "capture:screenshot-after-visual-change.ppm",
         "verify_visual_marker",
-        "stop",
+        "stop:True",
         "delete",
     ]
     artifact_dir = next(tmp_path.iterdir())
@@ -767,7 +767,11 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
         "get_vm",
         lambda: VmInfo("temp", "running", "192.168.64.10", "vnc://127.0.0.1:5901"),
     )
-    monkeypatch.setattr(temp_controller, "stop", lambda: stop_calls.append("stop"))
+    monkeypatch.setattr(
+        temp_controller,
+        "stop",
+        lambda *, shutdown=False: stop_calls.append(f"stop:{shutdown}"),
+    )
     monkeypatch.setattr(temp_controller, "delete", lambda: stop_calls.append("delete"))
 
     with pytest.raises(click.exceptions.Exit) as error:
@@ -784,7 +788,7 @@ def test_smoke_test_runner_failure_after_start_still_stops_vm(
         in captured.out
     )
     assert "HINT open the VM over VNC with `talonbox open temp`." in captured.out
-    assert stop_calls == ["stop", "delete"]
+    assert stop_calls == ["stop:True", "delete"]
 
 
 def test_smoke_test_runner_rejects_invalid_screenshot(
@@ -860,7 +864,11 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
         "close_desktop_capture_probe",
         lambda running_vm_arg: None,
     )
-    monkeypatch.setattr(temp_controller, "stop", lambda: stop_calls.append("stop"))
+    monkeypatch.setattr(
+        temp_controller,
+        "stop",
+        lambda *, shutdown=False: stop_calls.append(f"stop:{shutdown}"),
+    )
     monkeypatch.setattr(temp_controller, "delete", lambda: stop_calls.append("delete"))
 
     with pytest.raises(click.exceptions.Exit) as error:
@@ -873,4 +881,4 @@ def test_smoke_test_runner_rejects_invalid_screenshot(
         in captured.out
     )
     assert "HINT inspect the saved screenshot at" in captured.out
-    assert stop_calls == ["stop", "delete"]
+    assert stop_calls == ["stop:True", "delete"]
