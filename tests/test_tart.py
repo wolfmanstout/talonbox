@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -37,6 +38,7 @@ def test_get_vm_info_parses_tart_list_record(
     "Running" : false,
     "Source" : "local",
     "State" : "stopped",
+    "Accessed" : "2026-07-06T01:28:15Z",
     "Disk" : 50
   }
 ]
@@ -55,7 +57,16 @@ def test_get_vm_info_parses_tart_list_record(
 
     info = tart_module.get_vm_info("talon-test")
 
-    assert info == VmInfo("talon-test", "stopped", None)
+    assert info is not None
+    assert info == VmInfo(
+        "talon-test",
+        "stopped",
+        None,
+        last_accessed=datetime(2026, 7, 6, 1, 28, 15, tzinfo=UTC),
+    )
+    assert info.last_accessed is not None
+    assert info.last_accessed.isoformat() == "2026-07-06T01:28:15+00:00"
+    assert info.last_accessed.tzinfo is UTC
 
 
 def test_get_vm_info_resolves_ip_and_cached_vnc_for_running_vm(

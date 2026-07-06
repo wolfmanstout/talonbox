@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -817,22 +818,86 @@ def test_press_command_can_use_vnc(
 
 def test_list_command_prints_public_vms(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
+    older_accessed = datetime(2026, 7, 4, 15, 14, 41, tzinfo=UTC)
+    newer_accessed = datetime(2026, 7, 6, 1, 28, 15, tzinfo=UTC)
     monkeypatch.setattr(
         cli_module.VmController,
         "list_vms",
         lambda debug=False: [
-            VmInfo("golden", "stopped", None),
-            VmInfo("experiment", "running", "192.168.64.10", "vnc://127.0.0.1:5901"),
+            VmInfo(
+                "experiment",
+                "running",
+                "192.168.64.10",
+                "vnc://127.0.0.1:5901",
+                newer_accessed,
+            ),
+            VmInfo("golden", "stopped", None, last_accessed=older_accessed),
         ],
     )
 
     result = runner.invoke(cli, ["list"])
 
     assert result.exit_code == 0
+    older_local = cli_module._format_accessed_time(older_accessed)
+    newer_local = cli_module._format_accessed_time(newer_accessed)
+    headers = ["Name", "Status", "Last accessed", "IP", "VNC"]
+    data_rows = [
+        [
+            "experiment",
+            "running",
+            newer_local,
+            "192.168.64.10",
+            "vnc://127.0.0.1:5901",
+        ],
+        ["golden", "stopped", older_local, "-", "-"],
+    ]
+    widths = [
+        max(len(row[index]) for row in [headers, *data_rows])
+        for index in range(len(headers))
+    ]
+    rows = [
+        headers,
+        ["-" * width for width in widths],
+        *data_rows,
+    ]
     assert result.output == (
-        "name\tstatus\tip\tvnc\n"
-        "golden\tstopped\t-\t-\n"
-        "experiment\trunning\t192.168.64.10\tvnc://127.0.0.1:5901\n"
+        "\n".join(
+            "  ".join(
+                value.ljust(width) for value, width in zip(row, widths, strict=False)
+            ).rstrip()
+            for row in rows
+        )
+        + "\n"
+    )
+
+
+def test_format_accessed_time_uses_relative_phrasing() -> None:
+    now = datetime(2026, 7, 6, 2, 0, tzinfo=UTC)
+
+    assert cli_module._format_accessed_time(None, now=now) == "-"
+    assert (
+        cli_module._format_accessed_time(
+            datetime(2026, 7, 6, 1, 59, 42, tzinfo=UTC), now=now
+        )
+        == "just now"
+    )
+    assert (
+        cli_module._format_accessed_time(
+            datetime(2026, 7, 6, 1, 40, tzinfo=UTC), now=now
+        )
+        == "20 minutes ago"
+    )
+    assert (
+        cli_module._format_accessed_time(
+            datetime(2026, 7, 6, 1, 0, tzinfo=UTC), now=now
+        )
+        == "1 hour ago"
+    )
+    assert (
+        cli_module._format_accessed_time(
+            datetime(2026, 7, 3, 2, 0, tzinfo=UTC), now=now
+        )
+        == "3 days ago"
     )
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -27,19 +28,31 @@ def test_vm_controller_rejects_prefixed_public_name() -> None:
 def test_vm_controller_list_filters_and_strips_talonbox_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    older_accessed = datetime(2026, 7, 4, 15, 14, 41, tzinfo=UTC)
+    newer_accessed = datetime(2026, 7, 6, 1, 28, 15, tzinfo=UTC)
     monkeypatch.setattr(
         vm_module.tart,
         "list_vms",
         lambda debug=False: [
             VmInfo("not-talonbox", "stopped", None),
-            VmInfo("talonbox-golden", "stopped", None),
-            VmInfo("talonbox-experiment", "running", "192.168.64.10"),
+            VmInfo("talonbox-golden", "stopped", None, last_accessed=older_accessed),
+            VmInfo(
+                "talonbox-experiment",
+                "running",
+                "192.168.64.10",
+                last_accessed=newer_accessed,
+            ),
         ],
     )
 
     assert VmController.list_vms() == [
-        VmInfo("golden", "stopped", None),
-        VmInfo("experiment", "running", "192.168.64.10"),
+        VmInfo(
+            "experiment",
+            "running",
+            "192.168.64.10",
+            last_accessed=newer_accessed,
+        ),
+        VmInfo("golden", "stopped", None, last_accessed=older_accessed),
     ]
 
 

@@ -5,6 +5,7 @@ import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -458,18 +459,17 @@ def delete(settings: CliSettings, name: str) -> None:
 @cli.command(name="list", short_help="List talonbox VMs.")
 @pass_settings
 def list_command(settings: CliSettings) -> None:
-    click.echo("name\tstatus\tip\tvnc")
-    for info in VmController.list_vms(debug=settings.debug):
-        click.echo(
-            "\t".join(
-                [
-                    info.name,
-                    info.status,
-                    info.ip_address or "-",
-                    info.vnc_url or "-",
-                ]
-            )
-        )
+    rows = [
+        [
+            info.name,
+            info.status,
+            _format_accessed_time(info.last_accessed),
+            info.ip_address or "-",
+            info.vnc_url or "-",
+        ]
+        for info in VmController.list_vms(debug=settings.debug)
+    ]
+    click.echo(_format_table(["Name", "Status", "Last accessed", "IP", "VNC"], rows))
 
 
 @cli.command(
@@ -485,6 +485,61 @@ def list_command(settings: CliSettings) -> None:
 def status(settings: CliSettings, name: str) -> None:
     vm_controller = VmController(name, settings.debug)
     _echo_vm_info(vm_controller, vm_controller.get_vm())
+
+
+def _format_accessed_time(
+    value: datetime | None, *, now: datetime | None = None
+) -> str:
+    if value is None:
+        return "-"
+    local_value = value.astimezone()
+    local_now = (
+        datetime.now(local_value.tzinfo)
+        if now is None
+        else now.astimezone(local_value.tzinfo)
+    )
+    seconds = int((local_now - local_value).total_seconds())
+    if seconds < 0:
+        return f"in {_format_duration(-seconds)}"
+    if seconds < 60:
+        return "just now"
+    return f"{_format_duration(seconds)} ago"
+
+
+def _format_duration(seconds: int) -> str:
+    units = [
+        ("year", 365 * 24 * 60 * 60),
+        ("month", 30 * 24 * 60 * 60),
+        ("week", 7 * 24 * 60 * 60),
+        ("day", 24 * 60 * 60),
+        ("hour", 60 * 60),
+        ("minute", 60),
+    ]
+    for name, unit_seconds in units:
+        count = seconds // unit_seconds
+        if count:
+            suffix = "" if count == 1 else "s"
+            return f"{count} {name}{suffix}"
+    return "less than a minute"
+
+
+def _format_table(headers: list[str], rows: list[list[str]]) -> str:
+    widths = [
+        max(len(row[index]) for row in [headers, *rows])
+        for index in range(len(headers))
+    ]
+
+    def format_row(row: list[str]) -> str:
+        return "  ".join(
+            value.ljust(width) for value, width in zip(row, widths, strict=False)
+        ).rstrip()
+
+    lines = [
+        format_row(headers),
+        "  ".join("-" * width for width in widths),
+    ]
+    lines.extend(format_row(row) for row in rows)
+    return "\n".join(lines)
 
 
 @cli.command(

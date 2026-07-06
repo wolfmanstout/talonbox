@@ -8,6 +8,7 @@ import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ class VmInfo:
     status: str
     ip_address: str | None
     vnc_url: str | None = None
+    last_accessed: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -258,6 +260,7 @@ def _parse_tart_json(output: str) -> list[dict[str, Any]]:
 def _vm_info_from_record(record: Mapping[str, Any], *, debug: bool) -> VmInfo:
     name = str(record.get("Name", ""))
     status = str(record.get("State") or "unknown").lower()
+    last_accessed = _parse_tart_datetime(record.get("Accessed"))
     ip_address = None
     if status == "running":
         ip_address = _resolve_ip(name, debug=debug)
@@ -267,7 +270,20 @@ def _vm_info_from_record(record: Mapping[str, Any], *, debug: bool) -> VmInfo:
         status=status,
         ip_address=ip_address,
         vnc_url=vnc_url,
+        last_accessed=last_accessed,
     )
+
+
+def _parse_tart_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _resolve_ip(name: str, *, debug: bool) -> str | None:

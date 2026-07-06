@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -334,8 +335,13 @@ class VmController:
                     status=info.status,
                     ip_address=info.ip_address,
                     vnc_url=info.vnc_url,
+                    last_accessed=info.last_accessed,
                 )
             )
+        public_infos.sort(
+            key=lambda info: info.last_accessed or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
         return public_infos
 
     def debug_log(self, message: str) -> None:
@@ -535,6 +541,7 @@ class VmController:
             status=info.status,
             ip_address=info.ip_address,
             vnc_url=info.vnc_url,
+            last_accessed=info.last_accessed,
         )
 
     def _running_vm_from_info(self, info: tart.VmInfo) -> RunningVm:
