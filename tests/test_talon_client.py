@@ -8,7 +8,7 @@ import click
 import pytest
 
 from talonbox import vm as vm_module
-from tests.helpers import build_service_stack
+from tests.helpers import build_service_stack, repl_ok_result, unwrap_repl_payload
 
 
 def test_talon_client_repl_waits_for_socket_then_runs_script(
@@ -16,7 +16,7 @@ def test_talon_client_repl_waits_for_socket_then_runs_script(
 ) -> None:
     _, _, talon_client = build_service_stack()
     waits: list[tuple[str, float]] = []
-    payloads: list[tuple[str, str, bool]] = []
+    payloads: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         talon_client.running_vm,
@@ -28,24 +28,19 @@ def test_talon_client_repl_waits_for_socket_then_runs_script(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            payloads.append(
-                (talon_client.running_vm.ip_address, payload, stream_output)
-            )
-            or subprocess.CompletedProcess([], 0, "", "")
+        lambda payload: (
+            payloads.append((talon_client.running_vm.ip_address, payload))
+            or repl_ok_result(payload)
         ),
     )
 
     talon_client.repl("if True:\n    print(1)\nprint(2)\n")
 
     assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
-    assert payloads == [
-        (
-            "192.168.64.10",
-            "exec('if True:\\n    print(1)\\nprint(2)\\n')\n",
-            True,
-        )
-    ]
+    assert payloads[0][0] == "192.168.64.10"
+    wrapper = unwrap_repl_payload(payloads[0][1])
+    assert "exec('if True:\\n    print(1)\\nprint(2)\\n')" in wrapper
+    assert "print(traceback.format_exc())" in wrapper
 
 
 def test_talon_client_mimic_uses_python_escaped_payload(
@@ -65,15 +60,14 @@ def test_talon_client_mimic_uses_python_escaped_payload(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda payload: payloads.append(payload) or repl_ok_result(payload),
     )
 
     talon_client.mimic('say "hello"\nworld')
 
     assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
-    assert payloads == ["mimic('say \"hello\" world')\n"]
+    inner_code = "mimic('say \"hello\" world')"
+    assert f"exec({inner_code!r})" in unwrap_repl_payload(payloads[0])
 
 
 def test_talon_client_mimic_strips_embedded_speech_commands(
@@ -90,14 +84,12 @@ def test_talon_client_mimic_strips_embedded_speech_commands(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda payload: payloads.append(payload) or repl_ok_result(payload),
     )
 
     talon_client.mimic("talonbox [[slnc 500]] smoke [[rate 180]] [[volm +0.2]] test")
 
-    assert payloads == ["mimic('talonbox smoke test')\n"]
+    assert "mimic('talonbox smoke test')" in unwrap_repl_payload(payloads[0])
 
 
 def test_talon_client_mimic_audio_synthesizes_replays_and_cleans_up(
@@ -132,9 +124,7 @@ def test_talon_client_mimic_audio_synthesizes_replays_and_cleans_up(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda payload: payloads.append(payload) or repl_ok_result(payload),
     )
     talon_client.mimic("talonbox [[slnc 500]] smoke test", audio=True)
 
@@ -245,9 +235,7 @@ def test_talon_client_click_uses_talon_mouse_api(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda payload: payloads.append(payload) or repl_ok_result(payload),
     )
 
     talon_client.click(123, 456, button="right")
@@ -275,16 +263,15 @@ def test_talon_client_type_uses_talon_insert(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda payload: payloads.append(payload) or repl_ok_result(payload),
     )
 
-    talon_client.type_text('hello "world"\n')
+    text = 'hello "world"\n'
+    talon_client.type_text(text)
 
     assert waits == [("192.168.64.10", vm_module.TALON_REPL_TIMEOUT_SECONDS)]
-    assert "from talon import actions" in payloads[0]
-    assert "actions.insert(\\'hello \"world\"\\\\n\\')" in payloads[0]
+    expected_code = f"from talon import actions\nactions.insert({text!r})\n"
+    assert f"exec({expected_code!r})" in unwrap_repl_payload(payloads[0])
 
 
 def test_talon_client_press_key_uses_talon_key_action(
@@ -301,15 +288,14 @@ def test_talon_client_press_key_uses_talon_key_action(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda payload: payloads.append(payload) or repl_ok_result(payload),
     )
 
     talon_client.press_key("enter")
 
-    assert "from talon import actions" in payloads[0]
-    assert "actions.key('enter')" in payloads[0]
+    wrapper = unwrap_repl_payload(payloads[0])
+    assert "from talon import actions" in wrapper
+    assert "actions.key('enter')" in wrapper
 
 
 def test_talon_client_screenshot_uses_talon_capture_and_download(
@@ -332,9 +318,7 @@ def test_talon_client_screenshot_uses_talon_capture_and_download(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            repl_payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda payload: repl_payloads.append(payload) or repl_ok_result(payload),
     )
     monkeypatch.setattr(
         talon_client.running_vm,
@@ -358,11 +342,9 @@ def test_talon_client_screenshot_uses_talon_capture_and_download(
     assert target.parent.exists()
     assert repl_payloads[0].startswith("exec(")
     assert repl_payloads[0].endswith(")\n")
-    assert "screen.capture_rect(screen.main().rect, retina=False)" in repl_payloads[0]
-    assert (
-        "img.save(path) if hasattr(img, 'save') else img.write_file(path)"
-        in repl_payloads[0]
-    )
+    wrapper = unwrap_repl_payload(repl_payloads[0])
+    assert "screen.capture_rect(screen.main().rect, retina=False)" in wrapper
+    assert "img.save(path) if hasattr(img, 'save') else img.write_file(path)" in wrapper
     assert downloads[0][0] == "192.168.64.10"
     assert downloads[0][2] == target
     assert cleanup_commands[0].startswith('rm -f "/tmp/talonbox-screenshot-')
@@ -387,9 +369,7 @@ def test_talon_client_screenshot_preserves_requested_capture_suffix(
     monkeypatch.setattr(
         talon_client.running_vm,
         "run_repl",
-        lambda payload, stream_output=False: (
-            repl_payloads.append(payload) or subprocess.CompletedProcess([], 0, "", "")
-        ),
+        lambda payload: repl_payloads.append(payload) or repl_ok_result(payload),
     )
     monkeypatch.setattr(
         talon_client.running_vm,
@@ -407,12 +387,13 @@ def test_talon_client_screenshot_preserves_requested_capture_suffix(
     assert len(downloads) == 1
     assert downloads[0][1] == target
     assert downloads[0][0].endswith(".ppm")
-    assert "pixels = bytes(img.__array_interface__['data'])" in repl_payloads[0]
-    assert "rgb[target] = pixels[source]" in repl_payloads[0]
-    assert "rgb[target + 2] = pixels[source + 2]" in repl_payloads[0]
-    assert "rgb[target] = pixels[source + 2]" not in repl_payloads[0]
-    assert "header = f" in repl_payloads[0]
-    assert "P6\\\\n" in repl_payloads[0]
+    wrapper = unwrap_repl_payload(repl_payloads[0])
+    assert "pixels = bytes(img.__array_interface__['data'])" in wrapper
+    assert "rgb[target] = pixels[source]" in wrapper
+    assert "rgb[target + 2] = pixels[source + 2]" in wrapper
+    assert "rgb[target] = pixels[source + 2]" not in wrapper
+    assert "header = f" in wrapper
+    assert "P6\\\\n" in wrapper
 
 
 def test_talon_client_screenshot_surfaces_repl_traceback(
@@ -547,3 +528,89 @@ def test_talon_client_screenshot_rejects_output_outside_tmp() -> None:
         click.ClickException, match="Local output paths must stay under /tmp"
     ):
         talon_client.capture_screenshot(Path("/private/var/guest-screen.png"))
+
+
+TRACEBACK_OUTPUT = (
+    "Traceback (most recent call last):\nNotImplementedError: talon action failed\n"
+)
+
+
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        lambda client: client.mimic("garbage phrase"),
+        lambda client: client.click(123, 456),
+        lambda client: client.type_text("hello"),
+        lambda client: client.press_key("enter"),
+    ],
+    ids=["mimic", "click", "type", "press"],
+)
+def test_talon_client_surfaces_repl_traceback_despite_zero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    invoke: Any,
+) -> None:
+    _, _, talon_client = build_service_stack()
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: None,
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: subprocess.CompletedProcess(
+            [], 0, TRACEBACK_OUTPUT, ""
+        ),
+    )
+
+    with pytest.raises(click.ClickException, match="talon action failed"):
+        invoke(talon_client)
+
+
+def test_talon_client_repl_fails_on_traceback_in_streamed_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, talon_client = build_service_stack()
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: None,
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload, stream_output=False: subprocess.CompletedProcess(
+            [], 0, TRACEBACK_OUTPUT, ""
+        ),
+    )
+
+    with pytest.raises(
+        click.ClickException, match="raised an exception in Talon's REPL"
+    ):
+        talon_client.repl("raise NotImplementedError('talon action failed')")
+
+
+def test_talon_client_repl_echoes_output_without_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _, _, talon_client = build_service_stack()
+
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "wait_for_talon_repl",
+        lambda *, timeout=vm_module.TALON_REPL_TIMEOUT_SECONDS: None,
+    )
+    monkeypatch.setattr(
+        talon_client.running_vm,
+        "run_repl",
+        lambda payload: repl_ok_result(payload, stdout="2\n"),
+    )
+
+    talon_client.repl("print(1+1)")
+
+    captured = capsys.readouterr()
+    assert captured.out == "2\n"
+    assert "talonbox-repl-ok" not in captured.out

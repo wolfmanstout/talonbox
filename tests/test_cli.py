@@ -60,6 +60,8 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "open" in result.output
     assert "Guest shell:" in result.output
     assert "Talon RPC:" in result.output
+    assert "press" in result.output
+    assert "Other:" not in result.output
     assert "talonbox clone golden experiment" in result.output
     assert (
         "talonbox rsync -a ~/.talon/user/ experiment:/Users/admin/.talon/user/"
@@ -339,7 +341,8 @@ def test_mimic_command_delegates_to_talon_client(
     result = runner.invoke(cli, ["mimic", "experiment", "focus chrome"])
 
     assert result.exit_code == 0
-    assert result.output == "Mimic successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Mimic successful\n"
     assert calls == [("mimic", "focus chrome", False)]
 
 
@@ -362,7 +365,8 @@ def test_mimic_command_can_use_audio_mode(
     )
 
     assert result.exit_code == 0
-    assert result.output == "Mimic successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Mimic successful\n"
     assert calls == [("mimic", "talonbox [[slnc 500]] smoke test", True)]
 
 
@@ -508,7 +512,8 @@ def test_clone_command_delegates_to_vm_controller(
     result = runner.invoke(cli, ["clone", "golden", "experiment"])
 
     assert result.exit_code == 0
-    assert result.output == "Clone successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Clone successful\n"
     assert calls == [("golden", "experiment")]
 
 
@@ -527,7 +532,8 @@ def test_rename_command_delegates_to_vm_controller(
     result = runner.invoke(cli, ["rename", "experiment", "experiment-old"])
 
     assert result.exit_code == 0
-    assert result.output == "Rename successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Rename successful\n"
     assert calls == [("experiment", "experiment-old")]
 
 
@@ -546,7 +552,8 @@ def test_delete_command_delegates_to_vm_controller(
     result = runner.invoke(cli, ["delete", "experiment"])
 
     assert result.exit_code == 0
-    assert result.output == "Delete successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Delete successful\n"
     assert calls == ["experiment"]
 
 
@@ -613,7 +620,8 @@ def test_restart_talon_command_delegates_to_vm_controller(
     result = runner.invoke(cli, ["restart-talon", "experiment"])
 
     assert result.exit_code == 0
-    assert result.output == "Restart Talon successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Restart Talon successful\n"
     assert calls == ["experiment"]
 
 
@@ -632,7 +640,8 @@ def test_stop_command_delegates_to_vm_controller(
     result = runner.invoke(cli, ["stop", "--shutdown", "experiment"])
 
     assert result.exit_code == 0
-    assert result.output == "Stop successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Stop successful\n"
     assert calls == [("experiment", True)]
 
 
@@ -653,7 +662,8 @@ def test_screenshot_command_uses_talon_capture_by_default(
     result = runner.invoke(cli, ["screenshot", "experiment", "/tmp/screen.png"])
 
     assert result.exit_code == 0
-    assert result.output == "Screenshot successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Screenshot successful\n"
     assert calls == [("capture_screenshot", "/tmp/screen.png", False)]
 
 
@@ -676,7 +686,8 @@ def test_screenshot_command_can_use_vnc(
     )
 
     assert result.exit_code == 0
-    assert result.output == "Screenshot successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Screenshot successful\n"
     assert calls == [("capture_screenshot", "/tmp/screen.png", True)]
 
 
@@ -699,7 +710,8 @@ def test_click_command_uses_talon_by_default(
     result = runner.invoke(cli, ["click", "experiment", "400", "300"])
 
     assert result.exit_code == 0
-    assert result.output == "Click successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Click successful\n"
     assert calls == [("click", 400, 300, "left", False)]
 
 
@@ -724,7 +736,8 @@ def test_click_command_can_use_vnc_and_button(
     )
 
     assert result.exit_code == 0
-    assert result.output == "Click successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Click successful\n"
     assert calls == [("click", 400, 300, "right", True)]
 
 
@@ -745,7 +758,8 @@ def test_type_command_uses_talon_by_default(
     result = runner.invoke(cli, ["type", "experiment", "hello"])
 
     assert result.exit_code == 0
-    assert result.output == "Type successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Type successful\n"
     assert calls == [("type_text", "hello", False)]
 
 
@@ -766,7 +780,8 @@ def test_type_command_can_use_vnc(
     result = runner.invoke(cli, ["type", "--vnc", "experiment", "hello"])
 
     assert result.exit_code == 0
-    assert result.output == "Type successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Type successful\n"
     assert calls == [("type_text", "hello", True)]
 
 
@@ -789,7 +804,8 @@ def test_type_command_can_send_vnc_control_text(
     result = runner.invoke(cli, ["type", "--vnc", "experiment", text])
 
     assert result.exit_code == 0
-    assert result.output == "Type successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Type successful\n"
     assert calls == [("type_text", text, True)]
 
 
@@ -812,7 +828,8 @@ def test_press_command_can_use_vnc(
     result = runner.invoke(cli, ["press", "--vnc", "experiment", key])
 
     assert result.exit_code == 0
-    assert result.output == "Press successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Press successful\n"
     assert calls == [("press_key", key, True)]
 
 
@@ -983,7 +1000,8 @@ def test_repl_reads_stdin_when_no_code(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(cli, ["repl", "experiment"], input="print(1)\n")
 
     assert result.exit_code == 0
-    assert result.output == "Repl successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Repl successful\n"
     assert payloads == [("repl", "print(1)\n")]
 
 
@@ -1029,7 +1047,8 @@ def test_exec_command_reports_success_for_quiet_guest_shell(
     result = runner.invoke(cli, ["exec", "experiment", "--", "true"])
 
     assert result.exit_code == 0
-    assert result.output == "Exec successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Exec successful\n"
     assert calls == [("192.168.64.10", "true")]
 
 
@@ -1097,7 +1116,8 @@ def test_rsync_command_reports_success_for_quiet_transfer(
     )
 
     assert result.exit_code == 0
-    assert result.output == "Rsync successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Rsync successful\n"
     assert calls == [
         (
             "192.168.64.10",
@@ -1143,7 +1163,8 @@ def test_scp_command_reports_success_for_quiet_transfer(
     )
 
     assert result.exit_code == 0
-    assert result.output == "Scp successful\n"
+    assert result.stdout == ""
+    assert result.stderr == "Scp successful\n"
     assert calls == [
         (
             "192.168.64.10",

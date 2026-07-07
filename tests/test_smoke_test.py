@@ -336,10 +336,11 @@ def test_cleanup_guest_artifacts_removes_uploaded_bundle_and_marker(
 
 def test_smoke_test_runner_rejects_running_source_without_mutating_it(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     vm_controller, _, _ = build_service_stack()
-    runner = SmokeTestRunner(vm_controller)
+    runner = SmokeTestRunner(vm_controller, host_output_root=tmp_path.resolve())
     temp_controller = vm_controller.for_vm("temp")
 
     monkeypatch.setattr(vm_controller, "for_vm", lambda name: temp_controller)

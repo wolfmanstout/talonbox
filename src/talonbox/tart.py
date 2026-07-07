@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -200,14 +201,31 @@ def cleanup_launch_log(log_path: Path) -> None:
 
 
 def write_vnc_url(name: str, vnc_url: str) -> None:
-    _vnc_url_path(name).write_text(f"{vnc_url}\n", encoding="utf-8")
+    # O_NOFOLLOW refuses to write through a symlink planted at this
+    # world-writable, predictable /tmp path. It only applies to the final path
+    # component, so the standard /tmp -> /private/tmp symlink on macOS is
+    # still traversed.
+    path = _vnc_url_path(name)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError:
+        path.unlink(missing_ok=True)
+        fd = os.open(path, flags | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(f"{vnc_url}\n")
 
 
 def read_vnc_url(name: str) -> str | None:
     try:
-        value = _vnc_url_path(name).read_text(encoding="utf-8").strip()
+        fd = os.open(_vnc_url_path(name), os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
         return None
+    except OSError:
+        # A symlink or unreadable file here is not a VNC URL we wrote.
+        return None
+    with os.fdopen(fd, encoding="utf-8") as handle:
+        value = handle.read().strip()
     return value or None
 
 

@@ -16,8 +16,9 @@ def test_get_vm_info_surfaces_raw_invalid_json(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         tart_module,
         "_run_tart",
-        lambda args, debug=False, capture_output=True: calls.append(args)
-        or subprocess.CompletedProcess(args, 0, '{"bad"', ""),
+        lambda args, debug=False, capture_output=True: (
+            calls.append(args) or subprocess.CompletedProcess(args, 0, '{"bad"', "")
+        ),
     )
 
     with pytest.raises(
@@ -126,8 +127,9 @@ def test_lifecycle_commands_delegate_to_tart(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         tart_module,
         "_run_tart",
-        lambda args, debug=False, capture_output=True: calls.append(args)
-        or subprocess.CompletedProcess(args, 0, "", ""),
+        lambda args, debug=False, capture_output=True: (
+            calls.append(args) or subprocess.CompletedProcess(args, 0, "", "")
+        ),
     )
 
     tart_module.clone_vm("talonbox-golden", "talonbox-live")
@@ -244,3 +246,31 @@ def test_wait_for_running_vm_requires_fresh_vnc_url_for_launch(
 
     assert info.vnc_url == "vnc://127.0.0.1:5902"
     assert tart_module.read_vnc_url("talon-test") == "vnc://127.0.0.1:5902"
+
+
+def test_write_vnc_url_replaces_symlink_instead_of_following_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "target.txt"
+    target.write_text("keep\n", encoding="utf-8")
+    link = tmp_path / "talon-test.vnc"
+    link.symlink_to(target)
+    monkeypatch.setattr(tart_module, "_vnc_url_path", lambda name: link)
+
+    tart_module.write_vnc_url("talon-test", "vnc://127.0.0.1:5901")
+
+    assert target.read_text(encoding="utf-8") == "keep\n"
+    assert not link.is_symlink()
+    assert tart_module.read_vnc_url("talon-test") == "vnc://127.0.0.1:5901"
+
+
+def test_read_vnc_url_ignores_symlinked_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    secret = tmp_path / "secret.txt"
+    secret.write_text("vnc://attacker@host\n", encoding="utf-8")
+    link = tmp_path / "talon-test.vnc"
+    link.symlink_to(secret)
+    monkeypatch.setattr(tart_module, "_vnc_url_path", lambda name: link)
+
+    assert tart_module.read_vnc_url("talon-test") is None

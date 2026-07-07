@@ -194,7 +194,7 @@ def test_transfer_service_rsync_uses_fixed_vm_shell(
             "(profile)",
             "rsync",
             "-e",
-            "sshpass -p admin ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=no -o NumberOfPasswordPrompts=1 -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no -o PreferredAuthentications=password -o PubkeyAuthentication=no",
+            "sshpass -p admin ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=no -o NumberOfPasswordPrompts=1 -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=10",
             "-av",
             "src/",
             "admin@192.168.64.10:/tmp/dest",
@@ -301,6 +301,8 @@ def test_transfer_service_scp_uses_fixed_vm_ssh_options(
             "PreferredAuthentications=password",
             "-o",
             "PubkeyAuthentication=no",
+            "-o",
+            "ConnectTimeout=10",
             "./settings.talon",
             "admin@192.168.64.10:/tmp/settings.talon",
         ]
@@ -323,3 +325,47 @@ def test_transfer_service_sandbox_profile_allows_tmp_and_dev(
     assert '(allow file-write* (subpath "/private/tmp"))' in profile
     assert '(allow file-write* (subpath "/tmp"))' in profile
     assert '(allow file-write* (subpath "/dev"))' in profile
+
+
+def test_transfer_service_treats_colon_operand_with_slash_prefix_as_local() -> None:
+    parsed = parse_scp_args(["./weird:name.talon", "talon-test:/tmp/weird.talon"])
+
+    assert parsed.vm_name == "talon-test"
+    assert parsed.operands[0].kind == "local"
+    assert parsed.operands[0].path == "./weird:name.talon"
+
+
+def test_transfer_service_prints_sandbox_hint_only_for_denied_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _, transfer_service, _ = build_service_stack()
+    monkeypatch.setattr(
+        transfer_service,
+        "_sandbox_command_prefix",
+        lambda: ["sandbox-exec", "-p", "(profile)"],
+    )
+    responses = iter(
+        [
+            subprocess.CompletedProcess(
+                [], 23, "", "rsync: mkdir failed: Operation not permitted (1)"
+            ),
+            subprocess.CompletedProcess(
+                [],
+                255,
+                "",
+                "ssh: connect to host 192.168.64.10 port 22: Network is unreachable",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "talonbox.transfer.subprocess.run",
+        lambda cmd, **kwargs: next(responses),
+    )
+    parsed_args = parse_rsync_args(["-av", "src/", "talon-test:/tmp/dest"])
+
+    assert transfer_service.rsync(parsed_args) == 23
+    assert "HINT transfers run inside a macOS sandbox" in capsys.readouterr().err
+
+    assert transfer_service.rsync(parsed_args) == 255
+    assert "HINT" not in capsys.readouterr().err

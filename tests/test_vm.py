@@ -747,6 +747,8 @@ def test_running_vm_download_uses_scp(monkeypatch: pytest.MonkeyPatch) -> None:
             "PreferredAuthentications=password",
             "-o",
             "PubkeyAuthentication=no",
+            "-o",
+            "ConnectTimeout=10",
             "admin@192.168.64.10:/tmp/out.png",
             "/tmp/out.png",
         ]

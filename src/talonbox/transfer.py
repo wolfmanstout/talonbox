@@ -312,7 +312,9 @@ def _validate_short_transfer_option(
 
 def _classify_transfer_operand(raw: str) -> TransferOperand:
     remote_name, separator, path = raw.partition(":")
-    if separator:
+    # Like scp and rsync, a '/' before the first ':' marks the operand as a
+    # local path, so `./file:name` names a local file rather than a VM.
+    if separator and "/" not in remote_name:
         if raw.startswith("rsync://"):
             raise click.ClickException(
                 f"Only NAME:/path VM operands are allowed: {raw}"
@@ -473,7 +475,7 @@ class TransferService:
                 continue
 
             self._write_transfer_output(result)
-            if self._sandbox_command_prefix():
+            if "operation not permitted" in message.lower():
                 click.echo(
                     "HINT transfers run inside a macOS sandbox; extra host-side writes "
                     "outside /tmp fail with 'Operation not permitted'.",

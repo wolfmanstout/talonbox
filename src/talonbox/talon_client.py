@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -17,10 +17,17 @@ TALON_MOUSE_BUTTONS = {
     "middle": 2,
 }
 EMBEDDED_SPEECH_COMMAND_RE = re.compile(r"\[\[.*?\]\]")
+REPL_OK_PREFIX = "talonbox-repl-ok"
 
 
 def strip_embedded_speech_commands(command: str) -> str:
     return " ".join(EMBEDDED_SPEECH_COMMAND_RE.sub(" ", command).split())
+
+
+def _split_ok_sentinel(output: str, ok_line: str) -> tuple[str, bool]:
+    lines = output.splitlines(keepends=True)
+    kept = [line for line in lines if line.strip() != ok_line]
+    return "".join(kept), len(kept) != len(lines)
 
 
 class TalonClient:
@@ -34,30 +41,59 @@ class TalonClient:
         self.transfer_service = transfer_service
         self.vnc_client = vnc_client or VncClient(running_vm, transfer_service)
 
-    def repl(self, code: str) -> None:
-        self.running_vm.wait_for_talon_repl()
-        result = self.running_vm.run_repl(
-            f"exec({code!r})\n",
-            stream_output=True,
+    def _run_repl_code(self, code: str, *, echo_output: bool = False) -> None:
+        """Run Python in Talon's REPL, failing unless it confirms success.
+
+        Talon's repl exits 0 even when the submitted code raises, so the code
+        is wrapped to print a one-time sentinel only after it completes. A
+        missing sentinel means the code raised, and the captured output holds
+        the traceback.
+        """
+        ok_line = f"{REPL_OK_PREFIX} {uuid.uuid4().hex}"
+        wrapped = "\n".join(
+            [
+                "import traceback",
+                "try:",
+                f"    exec({code!r})",
+                "except BaseException:",
+                "    print(traceback.format_exc())",
+                "else:",
+                f"    print({ok_line!r})",
+                "",
+            ]
         )
+        self.running_vm.wait_for_talon_repl()
+        result = self.running_vm.run_repl(f"exec({wrapped!r})\n")
         if result.returncode:
             raise click.exceptions.Exit(result.returncode)
+        # Talon's repl client relays guest output over stderr, so scan both
+        # streams for the sentinel.
+        combined = (result.stdout or "") + (result.stderr or "")
+        output, confirmed = _split_ok_sentinel(combined, ok_line)
+        if echo_output and output:
+            sys.stdout.write(output)
+        if confirmed:
+            return
+        if echo_output:
+            raise click.ClickException(
+                "Python code raised an exception in Talon's REPL; see the output above."
+            )
+        raise click.ClickException(
+            output.strip() or "Talon's REPL did not confirm the code ran."
+        )
+
+    def repl(self, code: str) -> None:
+        self._run_repl_code(code, echo_output=True)
 
     def mimic(self, command: str, *, audio: bool = False) -> None:
         if audio:
             self.mimic_audio(command)
             return
 
-        self.running_vm.wait_for_talon_repl()
         command = strip_embedded_speech_commands(command)
-        result = self.running_vm.run_repl(
-            f"mimic({command!r})\n",
-        )
-        if result.returncode:
-            raise click.exceptions.Exit(result.returncode)
+        self._run_repl_code(f"mimic({command!r})")
 
     def mimic_audio(self, command: str) -> None:
-        self.running_vm.wait_for_talon_repl()
         remote_path = f"/tmp/talonbox-mimic-audio-{uuid.uuid4().hex}.wav"
         try:
             self.running_vm.run_shell(
@@ -77,9 +113,7 @@ class TalonClient:
                     "",
                 ]
             )
-            result = self.running_vm.run_repl(f"exec({code!r})\n")
-            if result.returncode:
-                raise click.exceptions.Exit(result.returncode)
+            self._run_repl_code(code)
         except (RemoteCommandError, TransportError) as error:
             raise click.ClickException(str(error)) from None
         finally:
@@ -102,10 +136,7 @@ class TalonClient:
                 "",
             ]
         )
-        self.running_vm.wait_for_talon_repl()
-        result = self.running_vm.run_repl(f"exec({code!r})\n")
-        if result.returncode:
-            raise click.exceptions.Exit(result.returncode)
+        self._run_repl_code(code)
 
     def type_text(self, text: str, *, vnc: bool = False) -> None:
         if vnc:
@@ -119,10 +150,7 @@ class TalonClient:
                 "",
             ]
         )
-        self.running_vm.wait_for_talon_repl()
-        result = self.running_vm.run_repl(f"exec({code!r})\n")
-        if result.returncode:
-            raise click.exceptions.Exit(result.returncode)
+        self._run_repl_code(code)
 
     def press_key(self, key: str, *, vnc: bool = False) -> None:
         if vnc:
@@ -136,10 +164,7 @@ class TalonClient:
                 "",
             ]
         )
-        self.running_vm.wait_for_talon_repl()
-        result = self.running_vm.run_repl(f"exec({code!r})\n")
-        if result.returncode:
-            raise click.exceptions.Exit(result.returncode)
+        self._run_repl_code(code)
 
     def capture_screenshot(self, filepath: Path, *, vnc: bool = False) -> None:
         if vnc:
@@ -151,12 +176,7 @@ class TalonClient:
         suffix = filepath.suffix if filepath.suffix else ".png"
         remote_path = f"/tmp/talonbox-screenshot-{uuid.uuid4().hex}{suffix}"
         try:
-            self.running_vm.wait_for_talon_repl()
-            result = self._capture_with_talon(remote_path)
-            if result.returncode:
-                raise click.exceptions.Exit(result.returncode)
-            if "Traceback (most recent call last)" in (result.stdout or ""):
-                raise click.ClickException(result.stdout.strip())
+            self._capture_with_talon(remote_path)
             self.running_vm.download(remote_path, filepath)
         except (RemoteCommandError, TransportError) as error:
             raise click.ClickException(str(error)) from None
@@ -168,9 +188,10 @@ class TalonClient:
             except (RemoteCommandError, TransportError):
                 pass
 
-    def _capture_with_talon(self, remote_path: str) -> subprocess.CompletedProcess[str]:
+    def _capture_with_talon(self, remote_path: str) -> None:
         if remote_path.endswith(".ppm"):
-            return self._capture_with_talon_ppm(remote_path)
+            self._capture_with_talon_ppm(remote_path)
+            return
 
         code = "\n".join(
             [
@@ -178,15 +199,12 @@ class TalonClient:
                 f"path = {remote_path!r}",
                 "img = screen.capture_rect(screen.main().rect, retina=False)",
                 "img.save(path) if hasattr(img, 'save') else img.write_file(path)",
-                "print(path)",
                 "",
             ]
         )
-        return self.running_vm.run_repl(f"exec({code!r})\n")
+        self._run_repl_code(code)
 
-    def _capture_with_talon_ppm(
-        self, remote_path: str
-    ) -> subprocess.CompletedProcess[str]:
+    def _capture_with_talon_ppm(self, remote_path: str) -> None:
         code = "\n".join(
             [
                 "from pathlib import Path",
@@ -205,8 +223,7 @@ class TalonClient:
                 "    rgb[target + 2] = pixels[source + 2]",
                 "header = f'P6\\n{img.width} {img.height}\\n255\\n'.encode()",
                 "Path(path).write_bytes(header + rgb)",
-                "print(path)",
                 "",
             ]
         )
-        return self.running_vm.run_repl(f"exec({code!r})\n")
+        self._run_repl_code(code)

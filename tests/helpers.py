@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import re
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -8,10 +10,25 @@ import pytest
 
 from talonbox import tart as tart_module
 from talonbox import vm as vm_module
-from talonbox.talon_client import TalonClient
+from talonbox.talon_client import REPL_OK_PREFIX, TalonClient
 from talonbox.tart import VmInfo
 from talonbox.transfer import TransferService
 from talonbox.vm import RunningVm, VmController
+
+REPL_OK_LINE_RE = re.compile(rf"{REPL_OK_PREFIX} [0-9a-f]+")
+
+
+def unwrap_repl_payload(payload: str) -> str:
+    """Return the sentinel wrapper code inside an `exec('...')` REPL payload."""
+    assert payload.startswith("exec(") and payload.endswith(")\n")
+    return ast.literal_eval(payload[len("exec(") : -len(")\n")])
+
+
+def repl_ok_result(payload: str, stdout: str = "") -> subprocess.CompletedProcess[str]:
+    """Simulate Talon's repl running the payload code to completion."""
+    match = REPL_OK_LINE_RE.search(unwrap_repl_payload(payload))
+    assert match is not None, "payload is missing the success sentinel"
+    return subprocess.CompletedProcess([], 0, f"{stdout}{match.group(0)}\n", "")
 
 
 def fake_launch(

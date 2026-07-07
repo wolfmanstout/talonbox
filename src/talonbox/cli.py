@@ -35,7 +35,10 @@ HELP_COMMAND_GROUPS = (
         ),
     ),
     ("Guest shell", ("exec", "rsync", "scp")),
-    ("Talon RPC", ("restart-talon", "repl", "mimic", "click", "type", "screenshot")),
+    (
+        "Talon RPC",
+        ("restart-talon", "repl", "mimic", "click", "type", "press", "screenshot"),
+    ),
 )
 
 DEFAULT_TALON_DMG_URL = "https://talonvoice.com/dl/latest/talon-mac.dmg"
@@ -100,7 +103,9 @@ def _echo_vm_info(vm_controller: VmController, info: object) -> None:
 
 
 def _echo_success(command_name: str) -> None:
-    click.echo(f"{command_name} successful")
+    # stderr keeps stdout clean for commands whose stdout is data (exec, repl,
+    # rsync, scp) while still giving agents an explicit success confirmation.
+    click.echo(f"{command_name} successful", err=True)
 
 
 def _build_talon_client(settings: CliSettings, vm: str) -> TalonClient:
@@ -953,12 +958,3 @@ def screenshot(settings: CliSettings, vnc: bool, name: str, filepath: Path) -> N
         vnc=vnc,
     )
     _echo_success("Screenshot")
-
-
-def main() -> int:
-    cli.main(standalone_mode=False)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -377,8 +377,8 @@ class SmokeTestRunner:
     ) -> None:
         last_error: click.ClickException | None = None
         for attempt in range(1, attempts + 1):
-            talon_client.mimic("talonbox smoke test")
             try:
+                talon_client.mimic("talonbox smoke test")
                 self.verify_marker(running_vm, marker_path, token)
             except click.ClickException as error:
                 last_error = error
@@ -421,8 +421,9 @@ class SmokeTestRunner:
                 " The smoke-test command bundle could not be checked directly. "
                 "Inspect Talon logs and confirm a speech model is installed and selected."
             )
+        # Talon's repl client relays guest output over stderr, so check both.
         if result.returncode == 0 and "talonbox_direct_action_ok=True" in (
-            result.stdout or ""
+            (result.stdout or "") + (result.stderr or "")
         ):
             return (
                 " The smoke-test action is loaded and works when called directly, "

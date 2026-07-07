@@ -84,6 +84,8 @@ class RunningVm:
         "PreferredAuthentications=password",
         "-o",
         "PubkeyAuthentication=no",
+        "-o",
+        "ConnectTimeout=10",
     ]
 
     def __init__(
@@ -132,18 +134,13 @@ class RunningVm:
             )
         return result
 
-    def run_repl(
-        self,
-        payload: str,
-        *,
-        stream_output: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
+    def run_repl(self, payload: str) -> subprocess.CompletedProcess[str]:
         result = self._run_transport_command(
             [*self._ssh_command_prefix(), 'sh -lc "$HOME/.talon/bin/repl"'],
             input_text=payload,
             timeout=TALON_REPL_COMMAND_TIMEOUT_SECONDS,
         )
-        if stream_output or result.returncode != 0:
+        if result.returncode != 0:
             if result.stdout:
                 sys.stdout.write(result.stdout)
             if result.stderr:
