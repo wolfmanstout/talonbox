@@ -866,3 +866,19 @@ def test_running_vm_wait_for_talon_repl_checks_socket_path(
     running_vm.wait_for_talon_repl(timeout=12.0)
 
     assert calls == [('test -S "$HOME/.talon/.sys/repl.sock"', 12.0, True, True)]
+
+
+def test_vm_controller_formats_restore_hint_when_snapshot_restore_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_controller = VmController("experiment", False)
+    monkeypatch.setattr(vm_module.tart, "list_vms", lambda debug=False: [])
+
+    message = vm_controller._format_start_error(
+        "tart run exited before VM became ready: talonbox-experiment (exit code 1)\n"
+        'The virtual machine failed to restore with error "permission denied".'
+    )
+
+    assert "HINT the suspend snapshot may be unrestorable" in message
+    assert "talonbox stop --shutdown experiment" in message
+    assert "rerun `talonbox start`" in message

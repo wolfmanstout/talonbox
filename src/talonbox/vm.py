@@ -506,6 +506,14 @@ class VmController:
 
     def _format_start_error(self, message: str) -> str:
         lower_message = message.lower()
+        if "failed to restore" in lower_message:
+            restore_hint = (
+                "HINT the suspend snapshot may be unrestorable; shut down the VM with "
+                f"`talonbox stop --shutdown {self.vm}`, then rerun `talonbox start` "
+                "to cold-boot."
+            )
+            if restore_hint not in message:
+                message = f"{message}\n{restore_hint}"
         should_hint = any(
             needle in lower_message
             for needle in (
