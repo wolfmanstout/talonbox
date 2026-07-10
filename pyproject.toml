@@ -1,6 +1,6 @@
 [project]
 name = "talonbox"
-version = "0.2.0"
+version = "0.2.1"
 description = "A local sandbox for testing Talon scripts. Inspired by playwright-cli."
 readme = "README.md"
 authors = [{name = "James Stout"}]
