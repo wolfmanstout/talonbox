@@ -450,14 +450,18 @@ def rename(settings: CliSettings, source: str, dest: str) -> None:
 
 
 @cli.command(
-    short_help="Delete a stopped VM.",
-    help="Delete a stopped VM. Running VMs must be stopped first.",
-    epilog=_examples_epilog("talonbox delete experiment"),
+    short_help="Delete stopped VMs.",
+    help="Delete one or more stopped VMs. Running VMs must be stopped first.",
+    epilog=_examples_epilog(
+        "talonbox delete experiment",
+        "talonbox delete experiment-one experiment-two",
+    ),
 )
-@click.argument("name", metavar="NAME")
+@click.argument("names", nargs=-1, required=True, metavar="NAMES...")
 @pass_settings
-def delete(settings: CliSettings, name: str) -> None:
-    VmController(name, settings.debug).delete()
+def delete(settings: CliSettings, names: tuple[str, ...]) -> None:
+    for name in names:
+        VmController(name, settings.debug).delete()
     _echo_success("Delete")
 
 

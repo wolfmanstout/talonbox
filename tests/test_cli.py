@@ -537,7 +537,7 @@ def test_rename_command_delegates_to_vm_controller(
     assert calls == [("experiment", "experiment-old")]
 
 
-def test_delete_command_delegates_to_vm_controller(
+def test_delete_command_delegates_each_name_to_vm_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = CliRunner()
@@ -549,12 +549,24 @@ def test_delete_command_delegates_to_vm_controller(
         lambda self: calls.append(self.vm),
     )
 
-    result = runner.invoke(cli, ["delete", "experiment"])
+    result = runner.invoke(
+        cli,
+        ["delete", "experiment-one", "experiment-two"],
+    )
 
     assert result.exit_code == 0
     assert result.stdout == ""
     assert result.stderr == "Delete successful\n"
-    assert calls == ["experiment"]
+    assert calls == ["experiment-one", "experiment-two"]
+
+
+def test_delete_command_requires_at_least_one_name() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["delete"])
+
+    assert result.exit_code == 2
+    assert "Missing argument 'NAMES...'" in result.stderr
 
 
 def test_status_command_delegates_to_vm_controller(
