@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Self
 
 import click
 import pytest
@@ -20,7 +21,7 @@ def test_vnc_client_screenshot_captures_to_normalized_local_path(
     talon_client.running_vm.vnc_url = "vnc://:secret%20words@127.0.0.1:63414"
 
     class FakeVncConnection:
-        def __enter__(self) -> FakeVncConnection:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -56,7 +57,7 @@ def test_vnc_client_screenshot_allows_repeated_captures_in_one_process(
     talon_client.running_vm.vnc_url = "vnc://127.0.0.1:63414"
 
     class FakeVncConnection:
-        def __enter__(self) -> FakeVncConnection:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -93,7 +94,7 @@ def test_vnc_client_click_uses_vncdotool_button_numbers(
     talon_client.running_vm.vnc_url = "vnc://127.0.0.1:63414"
 
     class FakeVncConnection:
-        def __enter__(self) -> FakeVncConnection:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -124,7 +125,7 @@ def test_vnc_client_type_matches_vncdotool_type_key_mapping(
     talon_client.running_vm.vnc_url = "vnc://127.0.0.1:63414"
 
     class FakeVncConnection:
-        def __enter__(self) -> FakeVncConnection:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -158,7 +159,7 @@ def test_vnc_client_press_key_uses_vncdotool_key_mapping(
     talon_client.running_vm.vnc_url = "vnc://127.0.0.1:63414"
 
     class FakeVncConnection:
-        def __enter__(self) -> FakeVncConnection:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *args: object) -> None:

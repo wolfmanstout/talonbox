@@ -580,9 +580,11 @@ def test_running_vm_prevent_idle_lock_writes_current_host_screensaver_defaults(
     running_vm.prevent_idle_lock()
 
     assert calls == [
-        "defaults -currentHost write com.apple.screensaver idleTime -int 0 && "
-        "defaults write com.apple.screensaver askForPassword -int 0 && "
-        "defaults write com.apple.screensaver askForPasswordDelay -int 0",
+        (
+            "defaults -currentHost write com.apple.screensaver idleTime -int 0 && "
+            "defaults write com.apple.screensaver askForPassword -int 0 && "
+            "defaults write com.apple.screensaver askForPasswordDelay -int 0"
+        ),
         "killall cfprefsd >/dev/null 2>&1 || true",
     ]
 

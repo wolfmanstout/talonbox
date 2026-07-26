@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 
 import click
 
@@ -65,7 +66,7 @@ def is_transient_transport_error(message: str) -> bool:
 class RunningVm:
     SSH_USERNAME = "admin"
     SSH_PASSWORD = "admin"
-    SSH_OPTIONS = [
+    SSH_OPTIONS: ClassVar[list[str]] = [
         "-o",
         "StrictHostKeyChecking=no",
         "-o",

@@ -252,15 +252,12 @@ class SmokeTestRunner:
     def write_bundle(self, bundle_dir: Path, marker_path: str, token: str) -> None:
         bundle_dir.mkdir(parents=True, exist_ok=True)
         (bundle_dir / "talonbox_smoke_test.talon").write_text(
-            "\n".join(
-                [
-                    "-",
-                    "talonbox smoke test:",
-                    "    user.talonbox_smoke_test()",
-                    "talonbox smoke visual test:",
-                    "    user.talonbox_smoke_test_show_visual_marker()",
-                    "",
-                ]
+            (
+                "-\n"
+                "talonbox smoke test:\n"
+                "    user.talonbox_smoke_test()\n"
+                "talonbox smoke visual test:\n"
+                "    user.talonbox_smoke_test_show_visual_marker()\n"
             ),
             encoding="utf-8",
         )
@@ -466,12 +463,8 @@ class SmokeTestRunner:
 
     def trigger_visual_change(self, talon_client: TalonClient) -> None:
         talon_client.repl(
-            "\n".join(
-                [
-                    "from talon import actions",
-                    "actions.user.talonbox_smoke_test_show_visual_marker()",
-                ]
-            )
+            "from talon import actions\n"
+            "actions.user.talonbox_smoke_test_show_visual_marker()"
         )
 
     def _build_transfer_service(self, running_vm: RunningVm) -> TransferService:

@@ -54,8 +54,10 @@ def test_trigger_smoke_test_visual_change_calls_talon_action(
     runner.trigger_visual_change(talon_client)
 
     assert calls == [
-        "from talon import actions\n"
-        "actions.user.talonbox_smoke_test_show_visual_marker()"
+        (
+            "from talon import actions\n"
+            "actions.user.talonbox_smoke_test_show_visual_marker()"
+        )
     ]
 
 
