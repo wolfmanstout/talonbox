@@ -1,7 +1,7 @@
 [project]
 name = "talonbox"
 version = "0.2.1"
-description = "A local sandbox for testing Talon scripts. Inspired by playwright-cli."
+description = "Let your coding agents test Talon Voice scripts in disposable macOS VMs."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
