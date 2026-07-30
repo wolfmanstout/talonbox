@@ -3,33 +3,18 @@ name = "talonbox"
 version = "0.2.1"
 description = "A local sandbox for testing Talon scripts. Inspired by playwright-cli."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{name = "James Stout"}]
 requires-python = ">=3.11"
-classifiers = [
-    "License :: OSI Approved :: Apache Software License"
-]
 dependencies = [
     "click",
     "vncdotool>=1.3.0",
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.sdist]
-# Hatch always includes the root .gitignore in sdists.
-exclude = [
-    "/.codex",
-    "/.github",
-    "/.gitattributes",
-    "/.pre-commit-config.yaml",
-    "/.python-version",
-    "/.uv-tools",
-    "/AGENTS.md",
-    "/CLAUDE.md",
-    "/uv.lock",
-]
+requires = ["uv_build>=0.12.0,<0.13"]
+build-backend = "uv_build"
 
 [project.urls]
 Homepage = "https://github.com/wolfmanstout/talonbox"
