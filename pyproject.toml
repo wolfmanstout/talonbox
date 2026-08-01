@@ -27,7 +27,7 @@ talonbox = "talonbox.cli:cli"
 
 [dependency-groups]
 dev = [
-    "basedpyright==1.39.3",
+    "basedpyright==1.39.9",
     "pytest",
 ]
 
