@@ -52,6 +52,7 @@ def test_root_help_groups_commands_and_examples() -> None:
     assert "Some Talon-backed commands also accept `--vnc`" in result.output
     assert "prefer it during setup" in result.output
     assert "Never use automation to accept the Talon EULA." in output_words
+    assert "Agents: run all talonbox commands outside your sandbox" in output_words
     assert "VM lifecycle:" in result.output
     assert "clone" in result.output
     assert "delete" in result.output

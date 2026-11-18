@@ -345,7 +345,9 @@ talonbox smoke-test {quoted_name}
         "`smoke-test` runs diagnostics in a temporary clone so the source VM stays clean.\n\n"
         "Some Talon-backed commands also accept `--vnc`; prefer it during setup "
         "before Talon is fully installed. "
-        "Never use automation to accept the Talon EULA."
+        "Never use automation to accept the Talon EULA.\n\n"
+        "Agents: run all talonbox commands outside your sandbox; VM state may be "
+        "wrong inside it."
     ),
     epilog=_examples_epilog(
         "talonbox clone golden experiment",
